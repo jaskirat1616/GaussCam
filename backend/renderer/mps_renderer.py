@@ -34,9 +34,17 @@ class MPSRenderer(Renderer):
             raise RuntimeError("MPS not available. Cannot use MPSRenderer.")
         
         self.device = device
-        self.background_color = torch.tensor([0.0, 0.0, 0.0], device=device)
+        # Defer background color tensor creation to avoid Metal conflicts during init
+        self._background_color = None
         
         print(f"MPSRenderer initialized: {width}x{height} on {device}")
+    
+    @property
+    def background_color(self) -> torch.Tensor:
+        """Lazy initialization of background color tensor."""
+        if self._background_color is None:
+            self._background_color = torch.tensor([0.0, 0.0, 0.0], device=self.device)
+        return self._background_color
     
     def render(
         self,

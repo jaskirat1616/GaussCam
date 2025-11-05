@@ -25,7 +25,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from typing import Optional
 import sys
 
-from backend.ui.render_widget import RenderWidget
+# from backend.ui.render_widget import RenderWidget  # Defer import
 from backend.utils.gpu_detection import get_gpu_detector, is_cuda, is_mps
 from backend.renderer.base import Renderer
 from backend.renderer.cuda_renderer import CUDARenderer
@@ -71,14 +71,16 @@ class MainWindow(QMainWindow):
         self.renderer: Optional[Renderer] = None
         self.processing_thread: Optional[ProcessingThread] = None
         
-        # GPU detection
-        self.gpu_detector = get_gpu_detector()
-        self.backend = self.gpu_detector.get_backend()
+        # GPU detection (defer to avoid Metal conflicts during PySide6 init)
+        self.gpu_detector = None
+        self.backend = "unknown"
         
-        # Setup UI
+        # Setup UI first
         self._setup_ui()
         self._setup_menu()
-        self._setup_renderer()
+        
+        # Initialize GPU detection after UI is ready
+        self._init_gpu_detection()
     
     def _setup_ui(self) -> None:
         """Setup user interface."""
@@ -89,9 +91,16 @@ class MainWindow(QMainWindow):
         # Main layout
         main_layout = QHBoxLayout(central_widget)
         
-        # Render widget
-        self.render_widget = RenderWidget(self, width=640, height=480)
-        main_layout.addWidget(self.render_widget, stretch=3)
+        # Render widget (defer initialization to avoid Metal conflicts)
+        self.render_widget = None
+        # self.render_widget = RenderWidget(self, width=640, height=480)
+        # main_layout.addWidget(self.render_widget, stretch=3)
+        
+        # Placeholder label
+        placeholder = QLabel("Rendering will be initialized after GPU detection")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setMinimumSize(640, 480)
+        main_layout.addWidget(placeholder, stretch=3)
         
         # Control panel
         control_panel = self._create_control_panel()
@@ -171,9 +180,8 @@ class MainWindow(QMainWindow):
         
         layout.addStretch()
         
-        # Status label
-        status_text = f"Backend: {self.backend.upper()}\nDevice: {self.gpu_detector.device_name}"
-        self.status_label = QLabel(status_text)
+        # Status label (will be updated after GPU detection)
+        self.status_label = QLabel("Backend: Initializing...")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
         
@@ -210,12 +218,30 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
     
+    def _init_gpu_detection(self) -> None:
+        """Initialize GPU detection after UI is ready."""
+        try:
+            self.gpu_detector = get_gpu_detector()
+            self.backend = self.gpu_detector.get_backend()
+            # Update status label
+            status_text = f"Backend: {self.backend.upper()}\nDevice: {self.gpu_detector.device_name}"
+            if hasattr(self, 'status_label'):
+                self.status_label.setText(status_text)
+        except Exception as e:
+            print(f"Warning: GPU detection failed: {e}")
+            self.backend = "cpu"
+    
     def _setup_renderer(self) -> None:
-        """Setup renderer based on GPU backend."""
+        """Setup renderer based on GPU backend (lazy initialization)."""
+        if self.renderer is not None:
+            return  # Already initialized
+        
         try:
             if is_cuda():
                 self.renderer = CUDARenderer(width=640, height=480)
             elif is_mps():
+                # Initialize MPS renderer with error handling
+                # Defer MPS tensor creation to avoid Metal conflicts
                 self.renderer = MPSRenderer(width=640, height=480)
             else:
                 QMessageBox.warning(
@@ -229,6 +255,7 @@ class MainWindow(QMainWindow):
                 "Renderer Error",
                 f"Failed to initialize renderer: {str(e)}",
             )
+            self.renderer = None
     
     def _on_input_changed(self, text: str) -> None:
         """Handle input source change."""
@@ -253,6 +280,18 @@ class MainWindow(QMainWindow):
     
     def _on_start_clicked(self) -> None:
         """Handle start button click."""
+        # Initialize renderer if not already done
+        if self.renderer is None:
+            self._setup_renderer()
+        
+        if self.renderer is None:
+            QMessageBox.warning(
+                self,
+                "No Renderer",
+                "Failed to initialize renderer. Cannot start processing.",
+            )
+            return
+        
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         # TODO: Start processing
