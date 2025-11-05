@@ -25,6 +25,7 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from typing import Optional
 import sys
+import time
 
 from backend.ui.render_widget import RenderWidget
 from backend.utils.gpu_detection import get_gpu_detector, is_cuda, is_mps
@@ -44,6 +45,7 @@ class ProcessingThread(QThread):
         input_source: str,
         video_path: Optional[str] = None,
         renderer=None,
+        webcam_device_id: int = 0,
         parent=None,
     ):
         """
@@ -53,12 +55,14 @@ class ProcessingThread(QThread):
             input_source: 'webcam' or 'video'
             video_path: Path to video file (if input_source is 'video')
             renderer: Renderer instance
+            webcam_device_id: Webcam device ID (default: 0)
             parent: Parent widget
         """
         super().__init__(parent)
         self.input_source = input_source
         self.video_path = video_path
         self.renderer = renderer
+        self.webcam_device_id = webcam_device_id
         self.is_running = False
         self.stop_flag = False
         
@@ -91,7 +95,7 @@ class ProcessingThread(QThread):
             # Setup capture
             width, height = 640, 480
             if self.input_source == "webcam":
-                self.capture = WebcamCapture(device_id=0, width=width, height=height, fps=30)
+                self.capture = WebcamCapture(device_id=self.webcam_device_id, width=width, height=height, fps=30)
             elif self.input_source == "video" and self.video_path:
                 self.capture = VideoCapture(self.video_path, width=width, height=height)
                 width = self.capture.width
@@ -127,9 +131,42 @@ class ProcessingThread(QThread):
             
             # Processing loop with optimizations
             frame_count = 0
-            depth_skip_frames = 5  # Process depth every N frames (increased for speed)
-            frame_skip = 2  # Skip N frames between processing (process every Nth frame)
+            processing_start_time = time.time()
+            
+            # Get performance mode from parent
+            performance_mode = "Balanced"
+            if hasattr(self.parent(), 'performance_mode'):
+                performance_mode = self.parent().performance_mode
+            
+            # Initialize adaptive quality manager
+            from backend.utils.adaptive_quality import AdaptiveQualityManager
+            adaptive_manager = AdaptiveQualityManager(target_fps=15.0)
+            
+            # Adjust parameters based on performance mode
+            if performance_mode == "Fast":
+                depth_skip_frames = 15
+                frame_skip = 8
+                max_gaussians = 3000
+                target_size = 256
+                target_pixels = 15000
+                voxel_size = 0.15
+            elif performance_mode == "Quality":
+                depth_skip_frames = 5
+                frame_skip = 2
+                max_gaussians = 10000
+                target_size = 384
+                target_pixels = 30000
+                voxel_size = 0.08
+            else:  # Balanced
+                depth_skip_frames = 10
+                frame_skip = 5
+                max_gaussians = 5000
+                target_size = 320
+                target_pixels = 20000
+                voxel_size = 0.10
+            
             last_depth = None
+            last_rendered = None  # Cache last rendered frame
             
             while not self.stop_flag:
                 # Read frame
@@ -143,10 +180,13 @@ class ProcessingThread(QThread):
                 
                 print(f"Frame {frame_count} read: shape={frame.shape if hasattr(frame, 'shape') else 'unknown'}")
                 
-                # Skip frames for performance
+                # Skip frames for performance - only process every Nth frame
                 if frame_count % (frame_skip + 1) != 0:
+                    # Emit cached frame if available
+                    if last_rendered is not None:
+                        self.frame_ready.emit(last_rendered)
                     frame_count += 1
-                    self.msleep(10)
+                    self.msleep(33)  # ~30 FPS display rate
                     continue
                 
                 # Convert to numpy if needed
@@ -176,18 +216,21 @@ class ProcessingThread(QThread):
                 if frame_count % depth_skip_frames == 0 or last_depth is None:
                     print(f"Estimating depth for frame {frame_count}...")
                     try:
-                        # Resize frame for faster depth estimation (if too large)
+                        # Always resize for faster depth estimation
                         h, w = frame.shape[:2]
-                        if h > 480 or w > 640:
-                            scale = min(480 / h, 640 / w)
-                            small_h, small_w = int(h * scale), int(w * scale)
-                            small_frame = cv2.resize(frame, (small_w, small_h))
+                        # Use adaptive target size based on performance mode
+                        if h > target_size or w > target_size:
+                            scale = min(target_size / h, target_size / w)
+                            small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
+                            small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
                             depth = self.depth_estimator.estimate_depth(small_frame, postprocess=True)
-                            depth = cv2.resize(depth, (w, h))
+                            # Resize depth back to original size (use linear for speed)
+                            depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_LINEAR)
                         else:
                             depth = self.depth_estimator.estimate_depth(frame, postprocess=True)
                         last_depth = depth
-                        print(f"Depth estimated: shape={depth.shape}, min={depth.min():.3f}, max={depth.max():.3f}")
+                        depth_time = time.time() - depth_start_time
+                        print(f"Depth estimated: shape={depth.shape}, min={depth.min():.3f}, max={depth.max():.3f}, time={depth_time:.3f}s")
                     except Exception as e:
                         print(f"Depth estimation error: {e}")
                         import traceback
@@ -204,27 +247,41 @@ class ProcessingThread(QThread):
                 # Convert to point cloud (with aggressive downsampling)
                 print(f"Converting to point cloud...")
                 try:
-                    # Downsample depth map first for speed
+                    # Always downsample depth map first for speed
                     h, w = depth.shape[:2]
-                    if h * w > 50000:  # If too many pixels, downsample first
-                        scale = np.sqrt(50000 / (h * w))
+                    # Use adaptive target pixels based on performance mode
+                    if h * w > target_pixels:
+                        scale = np.sqrt(target_pixels / (h * w))
                         small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
-                        small_depth = cv2.resize(depth, (small_w, small_h))
-                        small_frame = cv2.resize(frame, (small_w, small_h))
+                        small_depth = cv2.resize(depth, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+                        small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+                        # Update intrinsics for smaller size
+                        scale_factor = small_w / w
+                        from backend.utils.camera import CameraIntrinsics
+                        small_intrinsics = CameraIntrinsics(
+                            fx=self.intrinsics.fx * scale_factor,
+                            fy=self.intrinsics.fy * scale_factor,
+                            cx=self.intrinsics.cx * scale_factor,
+                            cy=self.intrinsics.cy * scale_factor,
+                            width=small_w,
+                            height=small_h,
+                        )
+                        # Use GPU-accelerated version if available
                         points, colors = depth_to_point_cloud(
-                            small_depth, small_frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
+                            small_depth, small_frame, small_intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
                         )
                     else:
+                        # Use GPU-accelerated version if available
                         points, colors = depth_to_point_cloud(
-                            depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
+                            depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
                         )
                     print(f"Point cloud: {len(points)} points")
                     
-                    # Aggressive downsampling for speed
-                    if len(points) > 5000:  # Lower threshold
+                    # Aggressive downsampling for speed (GPU-accelerated)
+                    if len(points) > 3000:  # Even lower threshold
                         from backend.utils.point_cloud import downsample_point_cloud
-                        voxel_size = 0.08  # Larger voxels for more aggressive downsampling
-                        points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size)
+                        # Use adaptive voxel size based on performance mode
+                        points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size, use_gpu=True)
                         print(f"Downsampled to {len(points)} points")
                 except Exception as e:
                     print(f"Point cloud conversion error: {e}")
@@ -237,8 +294,9 @@ class ProcessingThread(QThread):
                     try:
                         # Fit Gaussians (use uniform method for speed)
                         print(f"Fitting Gaussians from {len(points)} points...")
+                        # Use performance mode setting with GPU acceleration
                         gaussians = self.gaussian_fitter.fit_downsampled(
-                            points, colors, max_gaussians=10000, method="uniform"  # Faster uniform method
+                            points, colors, max_gaussians=max_gaussians, method="uniform", use_gpu=True  # GPU-accelerated
                         )
                         print(f"Fitted {gaussians.num_gaussians} Gaussians")
                         
@@ -255,6 +313,8 @@ class ProcessingThread(QThread):
                                 print(f"Rendering {merged_gaussians.num_gaussians} Gaussians...")
                                 rendered = self.renderer.render(merged_gaussians)
                                 print(f"Rendered frame: shape={rendered.shape}, min={rendered.min():.3f}, max={rendered.max():.3f}")
+                                # Cache rendered frame
+                                last_rendered = rendered.copy()
                                 # Emit frame for display
                                 self.frame_ready.emit(rendered)
                                 print(f"Frame emitted to UI")
@@ -267,18 +327,37 @@ class ProcessingThread(QThread):
                         import traceback
                         traceback.print_exc()
                 else:
-                    # Emit last frame or blank frame if no points
-                    if self.renderer is not None and self.gaussian_merger.accumulated_gaussians is not None:
+                    # Emit cached frame or last rendered frame if no points
+                    if last_rendered is not None:
+                        self.frame_ready.emit(last_rendered)
+                    elif self.renderer is not None and self.gaussian_merger.accumulated_gaussians is not None:
                         try:
                             rendered = self.renderer.render(self.gaussian_merger.accumulated_gaussians)
+                            last_rendered = rendered.copy()
                             self.frame_ready.emit(rendered)
                         except:
                             pass
                 
                 frame_count += 1
                 
+                # Update adaptive quality manager
+                frame_time = time.time() - processing_start_time
+                adaptive_manager.update(frame_time)
+                processing_start_time = time.time()
+                
+                # Adapt settings if needed (every 10 frames)
+                if frame_count % 10 == 0 and adaptive_manager.should_adapt():
+                    optimal = adaptive_manager.get_optimal_settings()
+                    depth_skip_frames = optimal["depth_skip_frames"]
+                    frame_skip = optimal["frame_skip"]
+                    max_gaussians = optimal["max_gaussians"]
+                    target_size = optimal["target_size"]
+                    target_pixels = optimal["target_pixels"]
+                    voxel_size = optimal["voxel_size"]
+                    print(f"Adapted settings: FPS={adaptive_manager.get_current_fps():.1f}, max_gaussians={max_gaussians}")
+                
                 # Small delay to prevent CPU spinning
-                self.msleep(100)  # Increased delay for better performance balance
+                self.msleep(200)  # Increased delay for better performance balance
         
         except Exception as e:
             import traceback
@@ -311,6 +390,7 @@ class MainWindow(QMainWindow):
         self.renderer: Optional[Renderer] = None
         self.processing_thread: Optional[ProcessingThread] = None
         self.video_path: Optional[str] = None
+        self.selected_webcam_id: int = 0
         
         # GPU detection (defer to avoid Metal conflicts during PySide6 init)
         self.gpu_detector = None
@@ -359,6 +439,15 @@ class MainWindow(QMainWindow):
         input_layout.addWidget(QLabel("Source:"))
         input_layout.addWidget(self.input_combo)
         
+        # Webcam selection
+        webcam_label = QLabel("Webcam Device:")
+        input_layout.addWidget(webcam_label)
+        
+        self.webcam_combo = QComboBox()
+        self._populate_webcam_devices()
+        self.webcam_combo.currentIndexChanged.connect(self._on_webcam_changed)
+        input_layout.addWidget(self.webcam_combo)
+        
         self.video_button = QPushButton("Select Video File")
         self.video_button.clicked.connect(self._select_video_file)
         self.video_button.setEnabled(False)
@@ -379,8 +468,21 @@ class MainWindow(QMainWindow):
         render_layout.addWidget(QLabel("LOD Level:"))
         render_layout.addWidget(self.lod_slider)
         
+        # Performance settings
+        perf_label = QLabel("Performance Mode:")
+        render_layout.addWidget(perf_label)
+        
+        self.performance_combo = QComboBox()
+        self.performance_combo.addItems(["Fast", "Balanced", "Quality"])
+        self.performance_combo.setCurrentText("Balanced")
+        self.performance_combo.currentTextChanged.connect(self._on_performance_changed)
+        render_layout.addWidget(self.performance_combo)
+        
         self.gaussian_count_label = QLabel("Gaussians: 0")
         render_layout.addWidget(self.gaussian_count_label)
+        
+        self.fps_label = QLabel("FPS: 0")
+        render_layout.addWidget(self.fps_label)
         
         render_group.setLayout(render_layout)
         layout.addWidget(render_group)
@@ -563,9 +665,44 @@ class MainWindow(QMainWindow):
             )
             self.renderer = None
     
+    def _populate_webcam_devices(self) -> None:
+        """Populate webcam device list."""
+        try:
+            from backend.input.capture import list_webcam_devices
+            devices = list_webcam_devices(max_devices=10)
+            self.webcam_combo.clear()
+            for device_id in devices:
+                self.webcam_combo.addItem(f"Camera {device_id}", device_id)
+            if len(devices) == 0:
+                self.webcam_combo.addItem("No cameras found", -1)
+                self.webcam_combo.setEnabled(False)
+            else:
+                self.selected_webcam_id = devices[0]
+        except Exception as e:
+            print(f"Error listing webcam devices: {e}")
+            self.webcam_combo.addItem("Camera 0", 0)
+            self.selected_webcam_id = 0
+    
+    def _on_webcam_changed(self, index: int) -> None:
+        """Handle webcam device selection change."""
+        if self.webcam_combo.itemData(index) is not None:
+            self.selected_webcam_id = self.webcam_combo.itemData(index)
+            print(f"Selected webcam device: {self.selected_webcam_id}")
+    
     def _on_input_changed(self, text: str) -> None:
         """Handle input source change."""
-        self.video_button.setEnabled(text == "Video File")
+        is_video = text == "Video File"
+        self.video_button.setEnabled(is_video)
+        self.webcam_combo.setEnabled(not is_video)
+    
+    def _on_performance_changed(self, mode: str) -> None:
+        """Handle performance mode change."""
+        self.performance_mode = mode
+        print(f"Performance mode changed to: {mode}")
+        # Update processing thread parameters if running
+        if self.processing_thread is not None and self.processing_thread.is_running:
+            # Will apply on next frame
+            pass
     
     def _on_lod_changed(self, value: int) -> None:
         """Handle LOD level change."""
@@ -635,6 +772,7 @@ class MainWindow(QMainWindow):
             input_source=input_source,
             video_path=self.video_path if input_source == "video" else None,
             renderer=self.renderer,
+            webcam_device_id=self.selected_webcam_id,
             parent=self,
         )
         self.processing_thread.frame_ready.connect(self._on_frame_ready)

@@ -127,24 +127,40 @@ class MiDaSDepthEstimator:
             return self._predict_pytorch(image)
     
     def _predict_pytorch(self, image: np.ndarray) -> np.ndarray:
-        """Predict depth using PyTorch model."""
+        """Predict depth using PyTorch model with optimizations."""
         with torch.no_grad():
+            # Use torch.compile for faster inference if available (PyTorch 2.0+)
+            if not hasattr(self, '_model_compiled'):
+                try:
+                    # Try to compile model for faster inference
+                    if hasattr(torch, 'compile'):
+                        self.model = torch.compile(self.model, mode="reduce-overhead")
+                        self._model_compiled = True
+                except:
+                    self._model_compiled = False
+            
             inputs = self.preprocess(image)
             
-            outputs = self.model(**inputs)
-            predicted_depth = outputs.predicted_depth
+            # Use inference mode for additional speed
+            with torch.inference_mode():
+                outputs = self.model(**inputs)
+                predicted_depth = outputs.predicted_depth
             
-            # Interpolate to original image size
+            # Interpolate to original image size (use bilinear for speed)
+            h, w = image.shape[:2]
             prediction = torch.nn.functional.interpolate(
                 predicted_depth.unsqueeze(1),
-                size=image.shape[:2],
-                mode="bicubic",
+                size=(h, w),
+                mode="bilinear",  # Faster than bicubic
                 align_corners=False,
             )
             
-            # Convert to numpy and normalize
+            # Convert to numpy and normalize (vectorized)
             depth = prediction.squeeze().cpu().numpy()
-            depth = (depth - depth.min()) / (depth.max() - depth.min() + 1e-8)
+            depth_min = depth.min()
+            depth_max = depth.max()
+            depth_range = depth_max - depth_min + 1e-8
+            depth = (depth - depth_min) / depth_range
             
             return depth
     

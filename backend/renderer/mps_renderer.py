@@ -309,21 +309,30 @@ class MPSRenderer(Renderer):
         valid_colors = sorted_colors[valid_indices]
         valid_opacities = sorted_opacities[valid_indices]
         
-        # Render points (simple alpha blending) - vectorized for speed
         # Limit to max_points for performance
         num_to_render = min(valid_indices.numel(), max_points)
         
-        for i in range(num_to_render):
-            u_int = u_coords[i].item()
-            v_int = v_coords[i].item()
-            color = valid_colors[i]
-            opacity = valid_opacities[i].item()
+        # Use vectorized scatter operations for faster rendering
+        if num_to_render > 0:
+            u_coords_limited = u_coords[:num_to_render]
+            v_coords_limited = v_coords[:num_to_render]
+            colors_limited = valid_colors[:num_to_render]
+            opacities_limited = valid_opacities[:num_to_render]
             
-            # Alpha blending
-            if alpha_buffer[v_int, u_int] < 1.0:
-                alpha = opacity * (1.0 - alpha_buffer[v_int, u_int])
-                image[v_int, u_int] += color * alpha
-                alpha_buffer[v_int, u_int] += alpha
+            # Get current alpha values for these pixels
+            pixel_indices = v_coords_limited * width + u_coords_limited
+            current_alpha = alpha_buffer.flatten()[pixel_indices]
+            
+            # Compute new alpha contribution
+            new_alpha = opacities_limited * (1.0 - current_alpha)
+            
+            # Update alpha buffer (vectorized)
+            alpha_buffer.flatten()[pixel_indices] += new_alpha
+            
+            # Update image (vectorized)
+            image_flat = image.view(-1, 3)
+            for c in range(3):
+                image_flat[pixel_indices, c] += colors_limited[:, c] * new_alpha
         
         # Normalize by alpha
         alpha_mask = alpha_buffer > 1e-8

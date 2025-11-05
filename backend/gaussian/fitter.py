@@ -291,9 +291,10 @@ class GaussianFitter:
         max_gaussians: int = 100000,
         voxel_size: Optional[float] = None,
         method: str = "pca",
+        use_gpu: bool = True,
     ) -> Gaussian:
         """
-        Fit Gaussians with downsampling to limit number.
+        Fit Gaussians with downsampling to limit number (GPU-accelerated if available).
         
         Args:
             points: Point cloud (N, 3)
@@ -301,6 +302,7 @@ class GaussianFitter:
             max_gaussians: Maximum number of Gaussians
             voxel_size: Voxel size for downsampling (auto if None)
             method: Fitting method
+            use_gpu: Use GPU acceleration for downsampling
         
         Returns:
             Gaussian object
@@ -316,7 +318,8 @@ class GaussianFitter:
         
         from backend.utils.point_cloud import downsample_point_cloud
         
-        points_ds, colors_ds = downsample_point_cloud(points, colors, voxel_size=voxel_size)
+        # Use GPU-accelerated downsampling if available
+        points_ds, colors_ds = downsample_point_cloud(points, colors, voxel_size=voxel_size, use_gpu=use_gpu)
         
         # Fit on downsampled points
         return self.fit(points_ds, colors_ds, method=method)

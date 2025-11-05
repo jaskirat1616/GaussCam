@@ -26,10 +26,10 @@ def test_camera_intrinsics_matrix():
     K = intrinsics.get_matrix()
     
     assert K.shape == (3, 3)
-    assert K[0, 0] == intrinsics.fx
-    assert K[1, 1] == intrinsics.fy
-    assert K[0, 2] == intrinsics.cx
-    assert K[1, 2] == intrinsics.cy
+    assert abs(K[0, 0] - intrinsics.fx) < 1e-4  # Floating point precision (relaxed for numpy float32)
+    assert abs(K[1, 1] - intrinsics.fy) < 1e-4
+    assert abs(K[0, 2] - intrinsics.cx) < 1e-4
+    assert abs(K[1, 2] - intrinsics.cy) < 1e-4
 
 
 def test_backproject():
