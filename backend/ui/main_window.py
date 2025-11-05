@@ -1253,8 +1253,15 @@ class MainWindow(QMainWindow):
         if self.progress_tracker is not None:
             stats = self.progress_tracker.get_stats()
             logger.info(f"Processing stats: {stats}")
+            # Handle both dict and object formats
+            if isinstance(stats, dict):
+                processed = stats.get('processed', 0)
+                fps = stats.get('fps', 0.0)
+            else:
+                processed = stats.processed_frames if hasattr(stats, 'processed_frames') else 0
+                fps = stats.fps if hasattr(stats, 'fps') else 0.0
             self._update_status(
-                f"Complete: {stats['processed']} frames processed at {stats['fps']:.1f} FPS"
+                f"Complete: {processed} frames processed at {fps:.1f} FPS"
             )
         
         # Show completion message
