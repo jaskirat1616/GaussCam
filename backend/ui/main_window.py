@@ -990,8 +990,12 @@ class MainWindow(QMainWindow):
     def _on_input_changed(self, text: str) -> None:
         """Handle input source change."""
         is_video = text == "Video File"
-        self.video_button.setEnabled(is_video)
-        self.webcam_combo.setEnabled(not is_video)
+        # Enable/disable video button based on selection
+        # Also check if processing is not running
+        is_processing = self.processing_thread is not None and self.processing_thread.isRunning()
+        self.video_button.setEnabled(is_video and not is_processing)
+        self.webcam_combo.setEnabled(not is_video and not is_processing)
+        logger.debug(f"Input changed to: {text}, video_button enabled: {is_video and not is_processing}")
     
     def _on_performance_changed(self, mode: str) -> None:
         """Handle performance mode change."""
@@ -1188,6 +1192,12 @@ class MainWindow(QMainWindow):
         
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        # Re-enable input controls after processing stops
+        self.input_combo.setEnabled(True)
+        # Re-enable based on current selection
+        is_video = self.input_combo.currentText() == "Video File"
+        self.video_button.setEnabled(is_video)
+        self.webcam_combo.setEnabled(not is_video)
         self.progress_bar.setVisible(False)
         self._update_status("Stopped")
         logger.info("Processing stopped")
@@ -1248,6 +1258,12 @@ class MainWindow(QMainWindow):
         logger.info("Processing finished")
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        # Re-enable input controls after processing stops
+        self.input_combo.setEnabled(True)
+        # Re-enable based on current selection
+        is_video = self.input_combo.currentText() == "Video File"
+        self.video_button.setEnabled(is_video)
+        self.webcam_combo.setEnabled(not is_video)
         self.progress_bar.setVisible(False)
         
         # Get final stats if available
