@@ -322,7 +322,9 @@ class DepthAnythingV2Estimator:
         # Convert to PIL Image (already in RGB format from preprocess)
         pil_image = Image.fromarray(image)
         
-        # Predict depth
+        # Predict depth using pipeline
+        # According to https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf:
+        # depth = pipe(image)["depth"]
         try:
             result = self.pipeline(pil_image)
             
@@ -331,23 +333,28 @@ class DepthAnythingV2Estimator:
                 logger.debug(f"Pipeline returned dict with keys: {list(result.keys())}")
             
             # Handle different result formats
-            # Some pipelines return dict with 'depth', others return PIL Image directly
+            # According to the HuggingFace model card, pipeline returns dict with "depth" key
             if isinstance(result, dict):
-                # Try common keys in order of preference
-                depth = None
-                for key in ["depth", "predicted_depth", "depth_map", "depth_image"]:
-                    if key in result:
-                        depth = result[key]
-                        logger.debug(f"Found depth in key: {key}")
-                        break
-                
-                if depth is None:
-                    # Try to get the first value if it's a dict
-                    if result:
-                        depth = list(result.values())[0]
-                        logger.debug(f"Using first value from dict: {type(depth)}")
-                    else:
-                        raise ValueError("Pipeline returned empty dictionary")
+                # Try "depth" key first (as per official documentation)
+                if "depth" in result:
+                    depth = result["depth"]
+                    logger.debug("Found depth in 'depth' key")
+                else:
+                    # Try other common keys as fallback
+                    depth = None
+                    for key in ["predicted_depth", "depth_map", "depth_image"]:
+                        if key in result:
+                            depth = result[key]
+                            logger.debug(f"Found depth in key: {key}")
+                            break
+                    
+                    if depth is None:
+                        # Try to get the first value if it's a dict
+                        if result:
+                            depth = list(result.values())[0]
+                            logger.debug(f"Using first value from dict: {type(depth)}")
+                        else:
+                            raise ValueError("Pipeline returned empty dictionary")
             elif hasattr(result, 'mode'):  # PIL Image
                 depth = result
                 logger.debug("Pipeline returned PIL Image")
