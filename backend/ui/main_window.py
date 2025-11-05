@@ -758,37 +758,37 @@ class MainWindow(QMainWindow):
         # Export menu
         export_menu = file_menu.addMenu("Export")
 
-            export_gaussians_action = QAction("Export Gaussians...", self)
-            export_gaussians_action.triggered.connect(self._export_gaussians)
-            export_menu.addAction(export_gaussians_action)
+        export_gaussians_action = QAction("Export Gaussians...", self)
+        export_gaussians_action.triggered.connect(self._export_gaussians)
+        export_menu.addAction(export_gaussians_action)
 
-            load_gaussians_action = QAction("Load Gaussians...", self)
-            load_gaussians_action.triggered.connect(self._load_gaussians)
-            export_menu.addAction(load_gaussians_action)
+        load_gaussians_action = QAction("Load Gaussians...", self)
+        load_gaussians_action.triggered.connect(self._load_gaussians)
+        export_menu.addAction(load_gaussians_action)
 
-            export_menu.addSeparator()
+        export_menu.addSeparator()
 
-            export_usdz_action = QAction("Export as USDZ (AR/VR)...", self)
-            export_usdz_action.triggered.connect(lambda: self._export_gaussians_format("usdz"))
-            export_menu.addAction(export_usdz_action)
+        export_usdz_action = QAction("Export as USDZ (AR/VR)...", self)
+        export_usdz_action.triggered.connect(lambda: self._export_gaussians_format("usdz"))
+        export_menu.addAction(export_usdz_action)
 
-            export_ply_action = QAction("Export as PLY...", self)
-            export_ply_action.triggered.connect(lambda: self._export_gaussians_format("ply"))
-            export_menu.addAction(export_ply_action)
+        export_ply_action = QAction("Export as PLY...", self)
+        export_ply_action.triggered.connect(lambda: self._export_gaussians_format("ply"))
+        export_menu.addAction(export_ply_action)
 
-            export_obj_action = QAction("Export as OBJ...", self)
-            export_obj_action.triggered.connect(lambda: self._export_gaussians_format("obj"))
-            export_menu.addAction(export_obj_action)
+        export_obj_action = QAction("Export as OBJ...", self)
+        export_obj_action.triggered.connect(lambda: self._export_gaussians_format("obj"))
+        export_menu.addAction(export_obj_action)
 
-            export_glb_action = QAction("Export as GLB...", self)
-            export_glb_action.triggered.connect(lambda: self._export_gaussians_format("glb"))
-            export_menu.addAction(export_glb_action)
+        export_glb_action = QAction("Export as GLB...", self)
+        export_glb_action.triggered.connect(lambda: self._export_gaussians_format("glb"))
+        export_menu.addAction(export_glb_action)
 
-            export_menu.addSeparator()
+        export_menu.addSeparator()
 
-            export_video_action = QAction("Export Rendered Video...", self)
-            export_video_action.triggered.connect(self._export_video)
-            export_menu.addAction(export_video_action)
+        export_video_action = QAction("Export Rendered Video...", self)
+        export_video_action.triggered.connect(self._export_video)
+        export_menu.addAction(export_video_action)
         
         file_menu.addSeparator()
         
