@@ -212,21 +212,34 @@ class DepthAnythingV2Estimator:
         try:
             result = self.pipeline(pil_image)
             
+            # Debug: log result type and keys if dict
+            if isinstance(result, dict):
+                logger.debug(f"Pipeline returned dict with keys: {list(result.keys())}")
+            
             # Handle different result formats
             # Some pipelines return dict with 'depth', others return PIL Image directly
             if isinstance(result, dict):
-                # Try common keys
-                depth = result.get("depth") or result.get("predicted_depth") or result.get("depth_map")
+                # Try common keys in order of preference
+                depth = None
+                for key in ["depth", "predicted_depth", "depth_map", "depth_image"]:
+                    if key in result:
+                        depth = result[key]
+                        logger.debug(f"Found depth in key: {key}")
+                        break
+                
                 if depth is None:
                     # Try to get the first value if it's a dict
                     if result:
                         depth = list(result.values())[0]
+                        logger.debug(f"Using first value from dict: {type(depth)}")
                     else:
                         raise ValueError("Pipeline returned empty dictionary")
             elif hasattr(result, 'mode'):  # PIL Image
                 depth = result
+                logger.debug("Pipeline returned PIL Image")
             else:
                 depth = result
+                logger.debug(f"Pipeline returned: {type(result)}")
             
             if depth is None:
                 raise ValueError("Pipeline returned None or empty result")
@@ -238,6 +251,8 @@ class DepthAnythingV2Estimator:
             raise ValueError(f"Depth estimation failed - missing key: {e}")
         except Exception as e:
             logger.error(f"Depth estimation error: {e}", exc_info=True)
+            if 'result' in locals():
+                logger.error(f"Result type: {type(result)}, Result: {result}")
             raise
         
         # Convert to numpy array
