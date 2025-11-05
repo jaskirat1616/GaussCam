@@ -309,10 +309,14 @@ class DepthAnythingV2Estimator:
         logger.info(f"Encoder: {encoder}")
         logger.info(f"Device: {self.device}")
         
-        # Create model
+        # Create model (following official repository usage)
+        # According to https://github.com/DepthAnything/Depth-Anything-V2:
+        # model = DepthAnythingV2(**model_configs[encoder])
         self.depth_anything_model = DepthAnythingV2(**config)
         
         # Load checkpoint
+        # Checkpoint name format from repository: depth_anything_v2_{encoder}.pth
+        # e.g., depth_anything_v2_vits.pth, depth_anything_v2_vitb.pth, depth_anything_v2_vitl.pth
         checkpoint_name = f"depth_anything_v2_{encoder}.pth"
         
         # Try to find checkpoint in common locations
@@ -333,10 +337,14 @@ class DepthAnythingV2Estimator:
         
         if checkpoint_path is None:
             # Try to download from HuggingFace
+            # According to https://github.com/DepthAnything/Depth-Anything-V2
+            # Checkpoints are at: https://huggingface.co/depth-anything/Depth-Anything-V2-{Size}/resolve/main/depth_anything_v2_{encoder}.pth
             model_name_capitalized = self.model_size.capitalize()
+            # Use the exact URL format from the repository README
             checkpoint_url = f"https://huggingface.co/depth-anything/Depth-Anything-V2-{model_name_capitalized}/resolve/main/{checkpoint_name}"
             logger.info(f"Checkpoint not found locally. Downloading from HuggingFace...")
             logger.info(f"URL: {checkpoint_url}")
+            logger.info(f"This matches the official repository: https://github.com/DepthAnything/Depth-Anything-V2")
             
             # Download checkpoint
             import urllib.request
@@ -525,21 +533,28 @@ class DepthAnythingV2Estimator:
         return depth.astype(np.float32)
     
     def _predict_direct(self, image: np.ndarray) -> np.ndarray:
-        """Predict depth using direct model from repository."""
+        """
+        Predict depth using direct model from repository.
+        
+        Following official repository usage from https://github.com/DepthAnything/Depth-Anything-V2:
+        raw_img = cv2.imread('your/image/path')  # BGR format from OpenCV
+        depth = model.infer_image(raw_img)  # HxW raw depth map in numpy
+        """
         if self.depth_anything_model is None:
             raise RuntimeError("Model not loaded. Call _load_direct() first.")
         
-        # Preprocess image (convert to RGB if needed)
-        # The model's infer_image expects BGR image from OpenCV
-        # But we've already converted to RGB in preprocess, so convert back
+        # The model's infer_image expects BGR image from OpenCV (as per repository)
+        # Our preprocess converts to RGB, so we need to convert back to BGR
+        # According to repository: "raw_img = cv2.imread('your/image/path')" - OpenCV uses BGR
         image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
         # Use the model's infer_image method (as per repository usage)
+        # According to repository: "depth = model.infer_image(raw_img) # HxW raw depth map in numpy"
         with torch.no_grad():
             depth = self.depth_anything_model.infer_image(image_bgr)
         
-        # Depth is returned as numpy array (H, W)
-        # Normalize to [0, 1]
+        # Depth is returned as numpy array (H, W) - raw depth map
+        # Normalize to [0, 1] for consistency with other depth estimators
         depth_min = depth.min()
         depth_max = depth.max()
         depth_range = depth_max - depth_min + 1e-8
