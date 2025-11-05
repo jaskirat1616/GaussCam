@@ -62,15 +62,21 @@ class DepthAnythingV2Estimator:
         # Try direct loading first (preferred), fallback to Transformers
         if DEPTH_ANYTHING_V2_AVAILABLE and not use_transformers:
             try:
+                logger.info(f"Attempting direct loading from repository...")
                 self._load_direct()
                 logger.info(f"Loaded Depth Anything V2 ({model_size}) directly from repository")
             except Exception as e:
-                logger.warning(f"Direct loading failed: {e}")
+                logger.warning(f"Direct loading failed: {e}", exc_info=True)
                 logger.info("Falling back to HuggingFace Transformers...")
                 if pipeline is not None:
+                    self.use_transformers = True  # Switch to Transformers mode
                     self._load_transformers()
                 else:
-                    raise ImportError("Neither direct loading nor Transformers available. Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
+                    raise ImportError(
+                        f"Neither direct loading nor Transformers available. "
+                        f"Direct loading error: {e}. "
+                        f"Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
+                    )
         elif use_transformers or (pipeline is not None and not DEPTH_ANYTHING_V2_AVAILABLE):
             self._load_transformers()
         else:
