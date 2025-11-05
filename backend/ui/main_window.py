@@ -76,6 +76,7 @@ class ProcessingThread(QThread):
         self.video_path = video_path
         self.renderer = renderer
         self.webcam_device_id = webcam_device_id
+        self.depth_model = depth_model
         self.is_running = False
         self.stop_flag = False
         
@@ -129,16 +130,43 @@ class ProcessingThread(QThread):
             self.async_capture.start()
             logger.info(f"Async capture started for {self.input_source}")
             
-            # Depth estimator (use smaller model for speed)
-            print("Loading MiDaS depth model...")
-            # Use hybrid model for better speed/quality balance
+            # Depth estimator - load based on selected model
+            logger.info(f"Loading depth model: {self.depth_model}...")
+            
             try:
-                self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-hybrid-midas")
-                print("MiDaS hybrid model loaded (faster)")
-            except:
-                # Fallback to large model
-                self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-large")
-                print("MiDaS large model loaded")
+                if self.depth_model == "MiDaS Hybrid":
+                    self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-hybrid-midas")
+                    logger.info("MiDaS hybrid model loaded")
+                elif self.depth_model == "MiDaS Large":
+                    self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-large")
+                    logger.info("MiDaS large model loaded")
+                elif self.depth_model == "Depth Anything V2 Small":
+                    from backend.depth.depth_anything_v2_wrapper import DepthAnythingV2Estimator
+                    self.depth_estimator = DepthAnythingV2Estimator(model_size="small", use_transformers=True)
+                    logger.info("Depth Anything V2 Small loaded")
+                elif self.depth_model == "Depth Anything V2 Base":
+                    from backend.depth.depth_anything_v2_wrapper import DepthAnythingV2Estimator
+                    self.depth_estimator = DepthAnythingV2Estimator(model_size="base", use_transformers=True)
+                    logger.info("Depth Anything V2 Base loaded")
+                elif self.depth_model == "Depth Anything V2 Large":
+                    from backend.depth.depth_anything_v2_wrapper import DepthAnythingV2Estimator
+                    self.depth_estimator = DepthAnythingV2Estimator(model_size="large", use_transformers=True)
+                    logger.info("Depth Anything V2 Large loaded")
+                else:
+                    # Default fallback
+                    logger.warning(f"Unknown depth model: {self.depth_model}, using MiDaS Hybrid")
+                    self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-hybrid-midas")
+                    logger.info("MiDaS hybrid model loaded (fallback)")
+            except Exception as e:
+                # Fallback to MiDaS Hybrid if Depth Anything V2 fails
+                logger.error(f"Failed to load depth model {self.depth_model}: {e}")
+                logger.info("Falling back to MiDaS Hybrid...")
+                try:
+                    self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-hybrid-midas")
+                    logger.info("MiDaS hybrid model loaded (fallback)")
+                except Exception as e2:
+                    logger.error(f"Failed to load MiDaS Hybrid: {e2}")
+                    raise
             
             # Camera intrinsics
             self.intrinsics = CameraIntrinsics.default(width, height, fov=60.0)
