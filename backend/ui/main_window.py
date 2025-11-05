@@ -233,12 +233,33 @@ class ProcessingThread(QThread):
             last_rendered = None  # Cache last rendered frame
             
             while not self.stop_flag:
-                # Read frame
-                frame = self.async_capture.read(timeout=0.1)
+                # Read frame with longer timeout for video
+                # Video processing can be slow, so we need more time
+                timeout = 5.0 if is_video else 0.1
+                frame = self.async_capture.read(timeout=timeout)
                 if frame is None:
                     if self.input_source == "video":
-                        # End of video
-                        logger.info("Video ended")
+                        # For video, check if we're actually at the end
+                        # The async capture might return None if processing is slow
+                        # Try a few more times before giving up
+                        consecutive_none_frames += 1
+                        if consecutive_none_frames <= 5:  # Retry up to 5 times
+                            logger.debug(f"Got None frame for video (attempt {consecutive_none_frames}/5), retrying...")
+                            self.msleep(100)  # Wait a bit before retry
+                            continue
+                        # Check if capture is actually done
+                        if hasattr(self.async_capture, 'capture') and hasattr(self.async_capture.capture, 'cap'):
+                            cap = self.async_capture.capture.cap
+                            if cap is not None:
+                                current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+                                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                                if current_frame < total_frames:
+                                    logger.warning(f"Got None frame but video not at end (frame {current_frame}/{total_frames}), retrying...")
+                                    consecutive_none_frames = 0  # Reset counter
+                                    self.msleep(200)  # Wait longer before retry
+                                    continue
+                        # Actually at end of video
+                        logger.info(f"Video ended (processed {frame_count} frames)")
                         break
                     # For webcam, keep trying - don't exit immediately
                     consecutive_none_frames += 1
