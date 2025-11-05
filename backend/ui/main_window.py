@@ -755,8 +755,8 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._select_video_file)
         file_menu.addAction(open_action)
         
-            # Export menu
-            export_menu = file_menu.addMenu("Export")
+        # Export menu
+        export_menu = file_menu.addMenu("Export")
 
             export_gaussians_action = QAction("Export Gaussians...", self)
             export_gaussians_action.triggered.connect(self._export_gaussians)

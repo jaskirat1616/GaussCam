@@ -38,6 +38,8 @@ moviepy>=1.0.3
 trimesh>=3.20.0  # For PLY, GLB, STL export
 usd-core>=23.08; sys_platform == 'darwin'  # USDZ export (macOS)
 # Note: For Windows/Linux USD, install usd-core separately or use alternative
+PyOpenGL>=3.1.6  # For 3D viewer
+PyOpenGL-accelerate>=3.1.6  # Optional: faster OpenGL
 
 # Development
 pytest>=7.4.0
