@@ -365,24 +365,50 @@ class DepthAnythingV2Estimator:
                     f"and place it in the 'checkpoints' directory or provide the path."
                 )
         
-        # Load checkpoint
+        # Load checkpoint (following official repository usage)
+        # According to https://github.com/DepthAnything/Depth-Anything-V2:
+        # model.load_state_dict(torch.load(f'checkpoints/depth_anything_v2_{encoder}.pth', map_location='cpu'))
         logger.info(f"Loading checkpoint from: {checkpoint_path}")
         try:
             checkpoint = torch.load(checkpoint_path, map_location='cpu')
             
-            # Handle different checkpoint formats
-            if isinstance(checkpoint, dict):
-                if 'model' in checkpoint:
-                    checkpoint = checkpoint['model']
-                elif 'state_dict' in checkpoint:
-                    checkpoint = checkpoint['state_dict']
+            # The repository checkpoints are direct state_dict files
+            # Try loading as-is first (most common format from repository)
+            try:
+                self.depth_anything_model.load_state_dict(checkpoint, strict=True)
+                logger.debug("Loaded checkpoint with strict=True")
+            except RuntimeError as strict_error:
+                # If strict loading fails, try with strict=False
+                logger.debug(f"Strict loading failed: {strict_error}, trying strict=False")
+                # Handle different checkpoint formats
+                if isinstance(checkpoint, dict):
+                    if 'model' in checkpoint:
+                        checkpoint = checkpoint['model']
+                        logger.debug("Using 'model' key from checkpoint")
+                    elif 'state_dict' in checkpoint:
+                        checkpoint = checkpoint['state_dict']
+                        logger.debug("Using 'state_dict' key from checkpoint")
+                    # Try loading again
+                    self.depth_anything_model.load_state_dict(checkpoint, strict=False)
+                else:
+                    # Try loading with strict=False anyway
+                    self.depth_anything_model.load_state_dict(checkpoint, strict=False)
             
-            self.depth_anything_model.load_state_dict(checkpoint, strict=False)
+            # Move to device and set to eval mode (following repository)
+            # According to repository: "model = model.to(DEVICE).eval()"
             self.depth_anything_model = self.depth_anything_model.to(self.device).eval()
             
+            # Final verification that model is loaded
+            if self.depth_anything_model is None:
+                raise RuntimeError("Model is None after loading checkpoint")
+            
             logger.info("Depth Anything V2 model loaded successfully (direct from repository)")
+            logger.info(f"Following official repository: https://github.com/DepthAnything/Depth-Anything-V2")
         except Exception as e:
-            logger.error(f"Failed to load checkpoint: {e}")
+            logger.error(f"Failed to load checkpoint: {e}", exc_info=True)
+            logger.error(f"Checkpoint path: {checkpoint_path}")
+            logger.error("Make sure the checkpoint file is downloaded correctly.")
+            logger.error(f"Download from: https://huggingface.co/depth-anything/Depth-Anything-V2-{self.model_size.capitalize()}/resolve/main/{checkpoint_name}")
             raise
     
     def preprocess(self, image: np.ndarray) -> np.ndarray:
