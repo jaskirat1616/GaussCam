@@ -105,21 +105,25 @@ class ProcessingThread(QThread):
             from backend.gaussian.fitter import GaussianFitter
             from backend.gaussian.merger import GaussianMerger
             
-                # Setup capture
-                width, height = 640, 480
-                if self.input_source == "webcam":
-                    logger.info(f"Opening webcam device {self.webcam_device_id}...")
-                    self.capture = WebcamCapture(device_id=self.webcam_device_id, width=width, height=height, fps=30)
-                    logger.info(f"Webcam opened: {width}x{height}")
+            # Setup capture
+            width, height = 640, 480
+            if self.input_source == "webcam":
+                logger.info(f"Opening webcam device {self.webcam_device_id}...")
+                self.capture = WebcamCapture(device_id=self.webcam_device_id, width=width, height=height, fps=30)
+                logger.info(f"Webcam opened: {width}x{height}")
             elif self.input_source == "video" and self.video_path:
+                logger.info(f"Opening video file: {self.video_path}")
                 self.capture = VideoCapture(self.video_path, width=width, height=height)
                 width = self.capture.width
                 height = self.capture.height
+                logger.info(f"Video opened: {width}x{height}")
             else:
-                self.error_occurred.emit("Invalid input source")
+                error_msg = "Invalid input source"
+                logger.error(error_msg)
+                self.error_occurred.emit(error_msg)
                 return
             
-                # Frame preprocessor
+            # Frame preprocessor
                 preprocessor = FramePreprocessor(normalize=True, to_rgb=True)
                 self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=2)
                 self.async_capture.start()
