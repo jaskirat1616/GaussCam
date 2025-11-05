@@ -158,27 +158,45 @@ class MPSRenderer(Renderer):
         sorted_indices = torch.argsort(depths, descending=True)
         
         # Render each Gaussian
-        for idx in sorted_indices:
-            u, v = uv[idx]
-            depth = depths[idx]
-            scale = scales[idx]
-            color = colors[idx]
-            opacity = opacities[idx]
+        # Use vectorized operations for better performance
+        sorted_uv = uv[sorted_indices]
+        sorted_depths = depths[sorted_indices]
+        sorted_colors = colors[sorted_indices]
+        sorted_opacities = opacities[sorted_indices]
+        
+        # Clamp UV coordinates to image bounds
+        u_coords = sorted_uv[:, 0].clamp(0, width - 1).long()
+        v_coords = sorted_uv[:, 1].clamp(0, height - 1).long()
+        
+        # Create valid mask
+        valid_mask = (
+            (sorted_uv[:, 0] >= 0) & (sorted_uv[:, 0] < width) &
+            (sorted_uv[:, 1] >= 0) & (sorted_uv[:, 1] < height) &
+            (sorted_depths > 0)
+        )
+        
+        # Apply valid mask and render
+        valid_indices_tensor = torch.where(valid_mask)[0]
+        
+        if valid_indices_tensor.numel() > 0:
+            u_valid = u_coords[valid_indices_tensor]
+            v_valid = v_coords[valid_indices_tensor]
+            colors_valid = sorted_colors[valid_indices_tensor]
+            opacities_valid = sorted_opacities[valid_indices_tensor]
             
-            # Skip if outside image
-            if u < 0 or u >= width or v < 0 or v >= height:
-                continue
-            
-            # Convert to integer pixel coordinates
-            u_int = int(u.clamp(0, width - 1))
-            v_int = int(v.clamp(0, height - 1))
-            
-            # Simple point rendering (simplified - full Gaussian would compute 2D covariance)
-            # For now, render as points with alpha
-            if alpha_buffer[v_int, u_int] < 1.0:
-                alpha = opacity * (1.0 - alpha_buffer[v_int, u_int])
-                image[v_int, u_int] += color * alpha
-                alpha_buffer[v_int, u_int] += alpha
+            # Render valid Gaussians
+            num_valid = valid_indices_tensor.numel()
+            for i in range(num_valid):
+                u_int = u_valid[i].item()
+                v_int = v_valid[i].item()
+                color = colors_valid[i]
+                opacity = opacities_valid[i].item()
+                
+                # Alpha blending
+                if alpha_buffer[v_int, u_int] < 1.0:
+                    alpha = opacity * (1.0 - alpha_buffer[v_int, u_int])
+                    image[v_int, u_int] += color * alpha
+                    alpha_buffer[v_int, u_int] += alpha
         
         # Normalize by alpha
         alpha_mask = alpha_buffer > 1e-8

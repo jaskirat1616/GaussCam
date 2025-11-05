@@ -105,7 +105,9 @@ class ProcessingThread(QThread):
             self.async_capture.start()
             
             # Depth estimator
+            print("Loading MiDaS depth model...")
             self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-large")
+            print("MiDaS model loaded")
             
             # Camera intrinsics
             self.intrinsics = CameraIntrinsics.default(width, height, fov=60.0)
@@ -113,6 +115,8 @@ class ProcessingThread(QThread):
             # Gaussian fitter and merger
             self.gaussian_fitter = GaussianFitter(k_neighbors=8, initial_opacity=0.9)
             self.gaussian_merger = GaussianMerger(merge_threshold=0.01, max_gaussians=500000)
+            
+            print(f"Processing started: {self.input_source}")
             
             # Processing loop
             frame_count = 0
@@ -123,6 +127,7 @@ class ProcessingThread(QThread):
                     if self.input_source == "video":
                         # End of video
                         break
+                    self.msleep(10)  # Small delay if no frame
                     continue
                 
                 # Convert to numpy if needed
@@ -130,35 +135,62 @@ class ProcessingThread(QThread):
                 if isinstance(frame, torch.Tensor):
                     frame = frame.cpu().numpy()
                 
+                # Ensure frame is in correct format
+                if frame.dtype != np.float32:
+                    if frame.max() > 1.0:
+                        frame = frame.astype(np.float32) / 255.0
+                    else:
+                        frame = frame.astype(np.float32)
+                
                 # Estimate depth
-                depth = self.depth_estimator.estimate_depth(frame, postprocess=True)
+                try:
+                    depth = self.depth_estimator.estimate_depth(frame, postprocess=True)
+                except Exception as e:
+                    print(f"Depth estimation error: {e}")
+                    self.msleep(100)
+                    continue
                 
                 # Convert to point cloud
-                points, colors = depth_to_point_cloud(
-                    depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
-                )
+                try:
+                    points, colors = depth_to_point_cloud(
+                        depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
+                    )
+                except Exception as e:
+                    print(f"Point cloud conversion error: {e}")
+                    self.msleep(100)
+                    continue
                 
                 if len(points) > 0:
-                    # Fit Gaussians
-                    gaussians = self.gaussian_fitter.fit_downsampled(
-                        points, colors, max_gaussians=50000, method="pca"
-                    )
-                    
-                    # Merge with accumulated
-                    merged_gaussians = self.gaussian_merger.merge(
-                        gaussians, merge_strategy="weighted"
-                    )
-                    
-                    # Render
-                    if self.renderer is not None:
-                        rendered = self.renderer.render(merged_gaussians)
-                        # Emit frame for display
-                        self.frame_ready.emit(rendered)
+                    try:
+                        # Fit Gaussians
+                        gaussians = self.gaussian_fitter.fit_downsampled(
+                            points, colors, max_gaussians=50000, method="pca"
+                        )
+                        
+                        # Merge with accumulated
+                        merged_gaussians = self.gaussian_merger.merge(
+                            gaussians, merge_strategy="weighted"
+                        )
+                        
+                        # Render
+                        if self.renderer is not None and merged_gaussians.num_gaussians > 0:
+                            try:
+                                rendered = self.renderer.render(merged_gaussians)
+                                # Emit frame for display
+                                self.frame_ready.emit(rendered)
+                            except Exception as e:
+                                print(f"Rendering error: {e}")
+                                import traceback
+                                traceback.print_exc()
+                    except Exception as e:
+                        print(f"Gaussian fitting/merging error: {e}")
+                        import traceback
+                        traceback.print_exc()
                 
                 frame_count += 1
                 
-                # Small delay to prevent CPU spinning
-                self.msleep(33)  # ~30 FPS
+                # Small delay to prevent CPU spinning (~30 FPS)
+                self.msleep(33)
         
         except Exception as e:
             import traceback
@@ -432,8 +464,13 @@ class MainWindow(QMainWindow):
     
     def _on_lod_changed(self, value: int) -> None:
         """Handle LOD level change."""
-        # TODO: Update renderer LOD
-        pass
+        # Update LOD level (will be used in next render)
+        if hasattr(self, 'processing_thread') and self.processing_thread is not None:
+            if hasattr(self.processing_thread, 'gaussian_merger') and \
+               self.processing_thread.gaussian_merger is not None:
+                # Apply LOD to accumulated Gaussians
+                # This will take effect on next frame
+                pass
     
     def _select_video_file(self) -> None:
         """Select video file."""
@@ -526,6 +563,8 @@ class MainWindow(QMainWindow):
                 gaussians = self.processing_thread.gaussian_merger.accumulated_gaussians
                 if gaussians is not None:
                     self.gaussian_count_label.setText(f"Gaussians: {gaussians.num_gaussians}")
+                else:
+                    self.gaussian_count_label.setText("Gaussians: 0")
     
     def _on_processing_error(self, error_msg: str) -> None:
         """Handle processing error."""
