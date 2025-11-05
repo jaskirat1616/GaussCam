@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QStatusBar,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QAction, QKeySequence
@@ -32,8 +33,8 @@ import time
 from backend.ui.render_widget import RenderWidget
 from backend.utils.gpu_detection import get_gpu_detector, is_cuda, is_mps
 from backend.renderer.base import Renderer
-from backend.renderer.cuda_renderer import CUDARenderer
-from backend.renderer.mps_renderer import MPSRenderer
+from backend.renderer.manager import create_renderer
+from backend.instant.initializer import InstantGaussianInitializer, ViewSample
 from backend.utils.logging_config import get_logger
 from backend.utils.validation import (
     validate_video_file,
@@ -90,6 +91,8 @@ class ProcessingThread(QThread):
         self.gaussian_fitter = None
         self.gaussian_merger = None
         self._last_gaussians = None
+        self.instant_initializer = InstantGaussianInitializer(max_gaussians=100000)
+        self._view_buffer: list[ViewSample] = []
     
     def run(self) -> None:
         """Run processing loop."""
@@ -360,6 +363,36 @@ class ProcessingThread(QThread):
                     # Reuse last depth
                     depth = last_depth
                 
+                # Instant initialization buffer
+                if depth is not None:
+                    rgb_frame = frame
+                    if rgb_frame.max() <= 1.0:
+                        rgb_frame = (rgb_frame * 255.0).astype(np.uint8)
+                    else:
+                        rgb_frame = rgb_frame.astype(np.uint8)
+
+                    depth_frame = depth.astype(np.float32)
+                    if len(self._view_buffer) >= 4:
+                        self._view_buffer.pop(0)
+                    self._view_buffer.append(ViewSample(rgb=rgb_frame.copy(), depth=depth_frame.copy()))
+
+                    if self._last_gaussians is None and self._view_buffer and self.intrinsics is not None:
+                        try:
+                            instant_gaussians = self.instant_initializer.initialize(
+                                self._view_buffer,
+                                intrinsics=self.intrinsics,
+                                depth_scale=5.0,
+                                max_depth=10.0,
+                            )
+                            self._last_gaussians = instant_gaussians
+                            self.gaussian_merger.accumulated_gaussians = instant_gaussians
+                            logger.info(
+                                "Instant reconstruction completed with %d Gaussians",
+                                instant_gaussians.num_gaussians,
+                            )
+                        except Exception as init_error:
+                            logger.debug(f"Instant initializer waiting for more views: {init_error}")
+
                 # Convert depth directly to Gaussians (skip point cloud step)
                 # Skip if depth hasn't changed (for video)
                 if is_video and last_depth is not None and frame_count % depth_skip_frames != 0:
@@ -602,7 +635,7 @@ class MainWindow(QMainWindow):
             self.config = AppConfig()
         
         self.setWindowTitle("GaussCam - Gaussian Splatting Renderer")
-        self.setMinimumSize(1100, 600)  # Increased width to accommodate control panel
+        self.setMinimumSize(1200, 700)  # Increased width and height to accommodate control panel and selectors
         self.resize(
             self.config.window_width,
             self.config.window_height
@@ -707,11 +740,21 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(camera_container, stretch=3)
         
-        # Right side: Control panel
+        # Right side: Control panel (scrollable)
         control_panel = self._create_control_panel()
-        control_panel.setMinimumWidth(320)
-        control_panel.setMaximumWidth(400)
-        main_layout.addWidget(control_panel, stretch=1)
+        control_panel.setMinimumWidth(380)  # Increased to accommodate selectors
+        control_panel.setMaximumWidth(450)  # Increased maximum width
+        
+        # Wrap in scroll area to handle height issues
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(control_panel)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setMinimumWidth(380)
+        scroll_area.setMaximumWidth(450)
+        
+        main_layout.addWidget(scroll_area, stretch=1)
     
     def _create_control_panel(self) -> QWidget:
         """Create control panel."""
@@ -755,7 +798,8 @@ class MainWindow(QMainWindow):
                 padding: 4px;
             }
             QComboBox {
-                min-width: 250px;
+                min-width: 280px;
+                min-height: 28px;  # Ensure proper height for visibility
             }
             QComboBox::drop-down {
                 border: none;
@@ -766,6 +810,7 @@ class MainWindow(QMainWindow):
                 color: white;
                 selection-background-color: #4a4a4a;
                 border: 1px solid #555;
+                min-width: 300px;  # Ensure dropdown items are fully visible
             }
             QLabel {
                 color: #ddd;
@@ -778,11 +823,15 @@ class MainWindow(QMainWindow):
         # Input source
         input_group = QGroupBox("Input Source")
         input_layout = QVBoxLayout()
+        input_layout.setContentsMargins(10, 15, 10, 10)  # Ensure proper margins
+        input_layout.setSpacing(6)
         
         self.input_combo = QComboBox()
         self.input_combo.addItems(["Webcam", "Video File"])
         self.input_combo.currentTextChanged.connect(self._on_input_changed)
         self.input_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.input_combo.setMinimumWidth(280)  # Increased minimum width
+        self.input_combo.setMinimumHeight(28)  # Ensure proper height
         input_layout.addWidget(QLabel("Source:"))
         input_layout.addWidget(self.input_combo)
         
@@ -794,7 +843,8 @@ class MainWindow(QMainWindow):
         self._populate_webcam_devices()
         self.webcam_combo.currentIndexChanged.connect(self._on_webcam_changed)
         self.webcam_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.webcam_combo.setMinimumWidth(250)
+        self.webcam_combo.setMinimumWidth(280)  # Increased minimum width
+        self.webcam_combo.setMinimumHeight(28)  # Ensure proper height
         input_layout.addWidget(self.webcam_combo)
         
         self.video_button = QPushButton("Select Video File")
@@ -814,6 +864,8 @@ class MainWindow(QMainWindow):
         # Rendering settings
         render_group = QGroupBox("Rendering Settings")
         render_layout = QVBoxLayout()
+        render_layout.setContentsMargins(10, 15, 10, 10)  # Ensure proper margins
+        render_layout.setSpacing(6)
         
         self.lod_slider = QSlider(Qt.Orientation.Horizontal)
         self.lod_slider.setMinimum(0)
@@ -832,7 +884,8 @@ class MainWindow(QMainWindow):
         self.performance_combo.setCurrentText("Balanced")
         self.performance_combo.currentTextChanged.connect(self._on_performance_changed)
         self.performance_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.performance_combo.setMinimumWidth(250)
+        self.performance_combo.setMinimumWidth(280)  # Increased minimum width
+        self.performance_combo.setMinimumHeight(28)  # Ensure proper height
         render_layout.addWidget(self.performance_combo)
         
         # Depth model settings
@@ -844,7 +897,8 @@ class MainWindow(QMainWindow):
         self.depth_model_combo.setCurrentText("MiDaS Hybrid")
         self.depth_model_combo.currentTextChanged.connect(self._on_depth_model_changed)
         self.depth_model_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.depth_model_combo.setMinimumWidth(250)
+        self.depth_model_combo.setMinimumWidth(280)  # Increased minimum width
+        self.depth_model_combo.setMinimumHeight(28)  # Ensure proper height
         render_layout.addWidget(self.depth_model_combo)
         
         self.gaussian_count_label = QLabel("Gaussians: 0")
@@ -1035,17 +1089,20 @@ class MainWindow(QMainWindow):
             return  # Already initialized
         
         try:
+            preferred = None
             if is_cuda():
-                self.renderer = CUDARenderer(width=640, height=480)
+                preferred = "cuda"
             elif is_mps():
-                # Initialize MPS renderer with error handling
-                # Defer MPS tensor creation to avoid Metal conflicts
-                self.renderer = MPSRenderer(width=640, height=480)
+                preferred = "mps"
             else:
-                QMessageBox.warning(
+                preferred = "webgpu"
+
+            self.renderer = create_renderer(preferred=preferred, width=640, height=480)
+            if preferred == "webgpu":
+                QMessageBox.information(
                     self,
-                    "No GPU",
-                    "No GPU detected. Falling back to CPU (not implemented).",
+                    "WebGPU Renderer",
+                    "No native GPU backend detected. Using WebGPU serialization backend.",
                 )
         except Exception as e:
             QMessageBox.critical(

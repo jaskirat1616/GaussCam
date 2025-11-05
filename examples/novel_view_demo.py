@@ -20,8 +20,7 @@ from backend.utils.point_cloud import depth_to_point_cloud
 from backend.gaussian.fitter import GaussianFitter
 from backend.gaussian.merger import GaussianMerger
 from backend.renderer.base import Renderer
-from backend.renderer.cuda_renderer import CUDARenderer
-from backend.renderer.mps_renderer import MPSRenderer
+from backend.renderer.manager import create_renderer
 from backend.utils.novel_view import NovelViewController
 from backend.utils.gpu_detection import is_cuda, is_mps
 
@@ -58,11 +57,11 @@ class NovelViewDemo:
         
         # Renderer
         if is_cuda():
-            self.renderer: Renderer = CUDARenderer(width=self.width, height=self.height)
+            self.renderer: Renderer = create_renderer(preferred="cuda", width=self.width, height=self.height)
         elif is_mps():
-            self.renderer: Renderer = MPSRenderer(width=self.width, height=self.height)
+            self.renderer: Renderer = create_renderer(preferred="mps", width=self.width, height=self.height)
         else:
-            raise RuntimeError("No GPU available")
+            self.renderer: Renderer = create_renderer(preferred="webgpu", width=self.width, height=self.height)
         
         self.gaussians = None
     

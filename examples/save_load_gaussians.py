@@ -20,8 +20,7 @@ from backend.utils.point_cloud import depth_to_point_cloud
 from backend.gaussian.fitter import GaussianFitter
 from backend.gaussian.merger import GaussianMerger
 from backend.renderer.base import Renderer
-from backend.renderer.cuda_renderer import CUDARenderer
-from backend.renderer.mps_renderer import MPSRenderer
+from backend.renderer.manager import create_renderer
 from backend.utils.gpu_detection import is_cuda, is_mps
 
 
@@ -186,12 +185,11 @@ def render_gaussians(gaussians_path: str, output_video: str = None):
     width, height = 640, 480
     
     if is_cuda():
-        renderer: Renderer = CUDARenderer(width=width, height=height)
+        renderer: Renderer = create_renderer(preferred="cuda", width=width, height=height)
     elif is_mps():
-        renderer: Renderer = MPSRenderer(width=width, height=height)
+        renderer: Renderer = create_renderer(preferred="mps", width=width, height=height)
     else:
-        print("Error: No GPU available")
-        return
+        renderer: Renderer = create_renderer(preferred="webgpu", width=width, height=height)
     
     # Render
     print("Rendering Gaussians...")
