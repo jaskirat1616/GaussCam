@@ -89,21 +89,17 @@ class DepthAnythingV2Estimator:
                 "transformers and Pillow required. Install with: pip install transformers pillow"
             )
         
-        # Try depth-anything organization models first (official HuggingFace models)
-        # According to https://huggingface.co/depth-anything, these are the official models
+        # Use official depth-anything organization models from HuggingFace
+        # According to https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
+        # These are the official Transformers-compatible models
         model_map = {
             'small': 'depth-anything/Depth-Anything-V2-Small-hf',
             'base': 'depth-anything/Depth-Anything-V2-Base-hf',
             'large': 'depth-anything/Depth-Anything-V2-Large-hf',
         }
         
-        # Alternative model names if the above don't work
-        # Some models may be available under different namespaces
-        alt_model_map = {
-            'small': 'LiheYoung/Depth-Anything-V2-Small-hf',
-            'base': 'LiheYoung/Depth-Anything-V2-Base-hf',
-            'large': 'LiheYoung/Depth-Anything-V2-Large-hf',
-        }
+        # Note: LiheYoung models are not available on HuggingFace
+        # If primary models fail, we should fall back to direct repository loading
         
         if self.model_size not in model_map:
             raise ValueError(
@@ -124,57 +120,39 @@ class DepthAnythingV2Estimator:
             logger.info(f"Downloading model from HuggingFace (first time only)...")
             logger.info(f"Model will be cached locally after download")
             
-            # Try primary model name first
+            # Try to load the official model
+            # Use device=-1 for CPU/MPS (MPS doesn't work well with pipeline)
+            device_id = 0 if is_cuda() else -1
+            logger.debug(f"Using device_id={device_id} for pipeline")
+            
             try:
-                # Use device=-1 for CPU/MPS (MPS doesn't work well with pipeline)
-                device_id = 0 if is_cuda() else -1
-                logger.debug(f"Using device_id={device_id} for pipeline")
-                
                 self.pipeline = pipeline(
                     task="depth-estimation",
                     model=model_name,
                     device=device_id,
                 )
-                logger.info("Depth Anything V2 model loaded successfully")
-            except KeyError as ke:
-                # KeyError during model loading - likely model config issue
-                error_msg = str(ke)
-                logger.warning(f"KeyError loading {model_name}: {error_msg}")
-                logger.warning("This suggests the model may not be properly configured on HuggingFace.")
-                logger.warning("Trying alternative model name...")
-                
-                # Try alternative model name
-                alt_model_name = alt_model_map.get(self.model_size)
-                if alt_model_name:
-                    try:
-                        self.pipeline = pipeline(
-                            task="depth-estimation",
-                            model=alt_model_name,
-                            device=device_id,
-                        )
-                        logger.info(f"Depth Anything V2 model loaded successfully (using alternative: {alt_model_name})")
-                    except Exception as e2:
-                        logger.error(f"Alternative model also failed: {e2}")
-                        raise e2
-                else:
-                    raise ke
+                logger.info("Depth Anything V2 model loaded successfully via Transformers")
             except Exception as e1:
-                # Try alternative model name if primary fails
-                logger.warning(f"Failed to load {model_name}: {e1}")
-                logger.warning("Trying alternative model name...")
-                alt_model_name = alt_model_map.get(self.model_size)
-                if alt_model_name:
-                    try:
-                        self.pipeline = pipeline(
-                            task="depth-estimation",
-                            model=alt_model_name,
-                            device=device_id,
-                        )
-                        logger.info(f"Depth Anything V2 model loaded successfully (using alternative: {alt_model_name})")
-                    except Exception as e2:
-                        logger.error(f"Alternative model also failed: {e2}")
-                        raise e2
+                # Log the full error for debugging
+                error_msg = str(e1)
+                logger.error(f"Failed to load {model_name}: {error_msg}")
+                
+                # Check if it's a model not found error
+                if "not a valid model identifier" in error_msg or "not a local folder" in error_msg:
+                    logger.error(f"Model {model_name} is not available on HuggingFace.")
+                    logger.error("This may be due to:")
+                    logger.error("  - Model name is incorrect")
+                    logger.error("  - Model requires authentication (private repository)")
+                    logger.error("  - Network connectivity issues")
+                    logger.error("")
+                    logger.error("Try installing Depth Anything V2 directly from the repository:")
+                    logger.error("  pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
+                    raise ImportError(
+                        f"Depth Anything V2 model {model_name} not available on HuggingFace. "
+                        f"Install from repository: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
+                    )
                 else:
+                    # Other error (network, authentication, etc.)
                     raise e1
         except Exception as e:
             error_msg = str(e)
