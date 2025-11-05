@@ -332,10 +332,33 @@ def list_webcam_devices(max_devices: int = 10) -> list:
         List of available device IDs
     """
     available = []
-    for i in range(max_devices):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            available.append(i)
-            cap.release()
+    # Suppress OpenCV warnings
+    import warnings
+    import os
+    
+    # Temporarily suppress OpenCV errors
+    old_env = os.environ.get('OPENCV_LOG_LEVEL', '')
+    os.environ['OPENCV_LOG_LEVEL'] = 'ERROR'
+    
+    try:
+        for i in range(max_devices):
+            try:
+                cap = cv2.VideoCapture(i, cv2.CAP_ANY)
+                if cap.isOpened():
+                    # Try to read a frame to verify it works
+                    ret, _ = cap.read()
+                    if ret:
+                        available.append(i)
+                cap.release()
+            except Exception:
+                # Skip devices that fail to open
+                pass
+    finally:
+        # Restore original log level
+        if old_env:
+            os.environ['OPENCV_LOG_LEVEL'] = old_env
+        elif 'OPENCV_LOG_LEVEL' in os.environ:
+            del os.environ['OPENCV_LOG_LEVEL']
+    
     return available
 

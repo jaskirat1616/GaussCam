@@ -144,14 +144,17 @@ class ProcessingThread(QThread):
                     logger.info("MiDaS large model loaded")
                 elif self.depth_model == "Depth Anything V2 Small":
                     from backend.depth.depth_anything_v2_wrapper import DepthAnythingV2Estimator
+                    logger.info("Downloading Depth Anything V2 Small from HuggingFace (first time only)...")
                     self.depth_estimator = DepthAnythingV2Estimator(model_size="small", use_transformers=True)
                     logger.info("Depth Anything V2 Small loaded")
                 elif self.depth_model == "Depth Anything V2 Base":
                     from backend.depth.depth_anything_v2_wrapper import DepthAnythingV2Estimator
+                    logger.info("Downloading Depth Anything V2 Base from HuggingFace (first time only)...")
                     self.depth_estimator = DepthAnythingV2Estimator(model_size="base", use_transformers=True)
                     logger.info("Depth Anything V2 Base loaded")
                 elif self.depth_model == "Depth Anything V2 Large":
                     from backend.depth.depth_anything_v2_wrapper import DepthAnythingV2Estimator
+                    logger.info("Downloading Depth Anything V2 Large from HuggingFace (first time only)...")
                     self.depth_estimator = DepthAnythingV2Estimator(model_size="large", use_transformers=True)
                     logger.info("Depth Anything V2 Large loaded")
                 else:
@@ -162,6 +165,10 @@ class ProcessingThread(QThread):
             except Exception as e:
                 # Fallback to MiDaS Hybrid if Depth Anything V2 fails
                 logger.error(f"Failed to load depth model {self.depth_model}: {e}")
+                logger.warning("This may be due to:")
+                logger.warning("  - Network connectivity issues")
+                logger.warning("  - Model download in progress (check logs)")
+                logger.warning("  - HuggingFace authentication required")
                 logger.info("Falling back to MiDaS Hybrid...")
                 try:
                     self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-hybrid-midas")
