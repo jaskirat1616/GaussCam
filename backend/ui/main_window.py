@@ -212,12 +212,12 @@ class ProcessingThread(QThread):
             is_video = self.input_source == "video"
             
             if is_fast_mode:
-                depth_skip_frames = 40 if is_video else 30
-                frame_skip = 30 if is_video else 15
-                max_gaussians = 800
-                target_size = 160  # Smaller for much faster depth
-                target_pixels = 6000  # More aggressive
-                voxel_size = 0.28  # Larger voxels
+                depth_skip_frames = 50 if is_video else 40  # Even more aggressive
+                frame_skip = 40 if is_video else 20  # Skip more frames
+                max_gaussians = 500  # Much fewer Gaussians
+                target_size = 128  # Even smaller for faster depth
+                target_pixels = 4000  # More aggressive downsampling
+                voxel_size = 0.35  # Larger voxels for speed
             elif performance_mode == "Quality":
                 depth_skip_frames = 10 if is_video else 5
                 frame_skip = 5 if is_video else 2
@@ -284,7 +284,7 @@ class ProcessingThread(QThread):
                     frame_count += 1
                     # For video, skip faster (no sleep needed)
                     if not is_video:
-                        self.msleep(33)  # ~30 FPS display rate for webcam
+                        self.msleep(16 if is_fast_mode else 33)  # Faster in fast mode
                     continue
                 
                 logger.debug(
@@ -318,7 +318,8 @@ class ProcessingThread(QThread):
                 # Estimate depth (skip frames for speed)
                 if frame_count % depth_skip_frames == 0 or last_depth is None:
                     depth_start_time = time.time()
-                    logger.info(f"Estimating depth for frame {frame_count}...")
+                    if not is_fast_mode:
+                        logger.info(f"Estimating depth for frame {frame_count}...")
                     try:
                         # Always resize for faster depth estimation
                         h, w = frame.shape[:2]
@@ -371,7 +372,8 @@ class ProcessingThread(QThread):
                         self.msleep(50)
                         continue
                 else:
-                    logger.info(f"Converting depth to Gaussians (frame {frame_count})...")
+                    if not is_fast_mode:
+                        logger.info(f"Converting depth to Gaussians (frame {frame_count})...")
                     try:
                         # Get depth dimensions
                         dh, dw = depth.shape[:2]
@@ -442,7 +444,8 @@ class ProcessingThread(QThread):
                                 use_gpu=True
                             )
                         
-                        logger.info(f"Fitted {gaussians.num_gaussians} Gaussians")
+                        if not is_fast_mode:
+                            logger.info(f"Fitted {gaussians.num_gaussians} Gaussians")
                         
                         # Cache Gaussians for video reuse
                         if is_video:
@@ -458,9 +461,23 @@ class ProcessingThread(QThread):
                 if gaussians.num_gaussians > 0:
                     try:
                         
+                        # Merge strategy: skip merging in fast mode for speed
                         if is_fast_mode:
-                            self.gaussian_merger.accumulated_gaussians = gaussians
-                            merged_gaussians = gaussians
+                            # Fast mode: skip expensive merging entirely, only merge every 20 frames
+                            if frame_count % 20 == 0 and self.gaussian_merger.accumulated_gaussians is not None:
+                                # Periodic merge to prevent unbounded growth (every 20 frames)
+                                merged_gaussians = self.gaussian_merger.merge(
+                                    gaussians, merge_strategy="nearest"
+                                )
+                            else:
+                                # Skip merging, just use current frame Gaussians (much faster)
+                                merged_gaussians = gaussians
+                                # Update accumulated for 3D viewer without expensive merge
+                                if self.gaussian_merger.accumulated_gaussians is None:
+                                    self.gaussian_merger.accumulated_gaussians = gaussians
+                                elif frame_count % 20 == 0:
+                                    # Simple update every 20 frames
+                                    self.gaussian_merger.accumulated_gaussians = gaussians
                         else:
                             logger.info("Merging Gaussians...")
                             merged_gaussians = self.gaussian_merger.merge(
@@ -468,10 +485,15 @@ class ProcessingThread(QThread):
                             )
                             logger.info(f"Merged to {merged_gaussians.num_gaussians} total Gaussians")
                         
-                        # Render
-                        if self.renderer is not None and merged_gaussians.num_gaussians > 0:
+                        # Render: skip some renders in fast mode
+                        render_this_frame = True
+                        if is_fast_mode:
+                            # Only render every other frame in fast mode
+                            render_this_frame = (frame_count % 2 == 0)
+                        
+                        if render_this_frame and self.renderer is not None and merged_gaussians.num_gaussians > 0:
                             try:
-                                logger.info(f"Rendering {merged_gaussians.num_gaussians} Gaussians...")
+                                logger.debug(f"Rendering {merged_gaussians.num_gaussians} Gaussians...")
                                 rendered = self.renderer.render(merged_gaussians)
                                 logger.debug(
                                     f"Rendered frame: shape={rendered.shape}, "
@@ -528,9 +550,9 @@ class ProcessingThread(QThread):
                 # Small delay to prevent CPU spinning
                 # Less delay for video (no real-time requirement)
                 if is_video:
-                    self.msleep(30 if is_fast_mode else 80)
+                    self.msleep(10 if is_fast_mode else 80)  # Much shorter delay in fast mode
                 else:
-                    self.msleep(30 if is_fast_mode else 150)
+                    self.msleep(10 if is_fast_mode else 150)  # Much shorter delay in fast mode
         
         except KeyboardInterrupt:
             logger.warning("Processing interrupted by user")
@@ -580,7 +602,7 @@ class MainWindow(QMainWindow):
             self.config = AppConfig()
         
         self.setWindowTitle("GaussCam - Gaussian Splatting Renderer")
-        self.setMinimumSize(1000, 600)
+        self.setMinimumSize(1100, 600)  # Increased width to accommodate control panel
         self.resize(
             self.config.window_width,
             self.config.window_height
@@ -615,6 +637,11 @@ class MainWindow(QMainWindow):
         # Initialize GPU detection after UI is ready
         self._init_gpu_detection()
         
+        # Setup timer to periodically update 3D viewer with accumulated Gaussians
+        self.viewer_update_timer = QTimer(self)
+        self.viewer_update_timer.timeout.connect(self._update_3d_viewer)
+        self.viewer_update_timer.start(500)  # Update every 500ms to show accumulated scene
+        
         self._update_status("Ready")
         logger.info("MainWindow initialized successfully")
     
@@ -645,18 +672,35 @@ class MainWindow(QMainWindow):
         )
         camera_layout.addWidget(self.render_placeholder)
         
-        # Gaussian preview below render view (optional, can be collapsed)
-        viewer_group = QGroupBox("Gaussian Preview")
+        # 3D Gaussian Splat Viewer below render view (optional, can be collapsed)
+        viewer_group = QGroupBox("3D Gaussian Splat Viewer")
         viewer_group.setCheckable(True)
-        viewer_group.setChecked(False)  # Collapsed by default
-        viewer_group.setMaximumHeight(300)
+        viewer_group.setChecked(True)  # Expanded by default to show 3D view
+        viewer_group.setMaximumHeight(400)
         viewer_layout = QVBoxLayout()
         viewer_layout.setContentsMargins(5, 5, 5, 5)
         
-        self.gaussian_preview = RenderWidget(self, width=320, height=240)
-        self.gaussian_preview.setMinimumSize(320, 200)
-        self.gaussian_preview.setMaximumHeight(280)
-        viewer_layout.addWidget(self.gaussian_preview)
+        try:
+            from backend.ui.viewer_3d import Viewer3DWidget
+            self.viewer_3d = Viewer3DWidget(self)
+            if self.viewer_3d.is_available:
+                viewer_layout.addWidget(self.viewer_3d)
+                self.viewer_3d.setMinimumHeight(250)
+                self.viewer_3d.setMaximumHeight(380)
+                logger.info("3D Gaussian Splat viewer initialized")
+            else:
+                viewer_label = QLabel("3D viewer not available (OpenGL required)\nInstall with: pip install PyOpenGL PyOpenGL-accelerate")
+                viewer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                viewer_label.setStyleSheet("color: #888; padding: 20px;")
+                viewer_layout.addWidget(viewer_label)
+                self.viewer_3d = None
+        except Exception as e:
+            logger.warning(f"Failed to initialize 3D viewer: {e}")
+            viewer_label = QLabel("3D viewer not available")
+            viewer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            viewer_label.setStyleSheet("color: #888; padding: 20px;")
+            viewer_layout.addWidget(viewer_label)
+            self.viewer_3d = None
         
         viewer_group.setLayout(viewer_layout)
         camera_layout.addWidget(viewer_group)
@@ -665,7 +709,8 @@ class MainWindow(QMainWindow):
         
         # Right side: Control panel
         control_panel = self._create_control_panel()
-        control_panel.setMaximumWidth(350)
+        control_panel.setMinimumWidth(320)
+        control_panel.setMaximumWidth(400)
         main_layout.addWidget(control_panel, stretch=1)
     
     def _create_control_panel(self) -> QWidget:
@@ -709,6 +754,19 @@ class MainWindow(QMainWindow):
                 border-radius: 3px;
                 padding: 4px;
             }
+            QComboBox {
+                min-width: 250px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #3a3a3a;
+                color: white;
+                selection-background-color: #4a4a4a;
+                border: 1px solid #555;
+            }
             QLabel {
                 color: #ddd;
             }
@@ -724,6 +782,7 @@ class MainWindow(QMainWindow):
         self.input_combo = QComboBox()
         self.input_combo.addItems(["Webcam", "Video File"])
         self.input_combo.currentTextChanged.connect(self._on_input_changed)
+        self.input_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         input_layout.addWidget(QLabel("Source:"))
         input_layout.addWidget(self.input_combo)
         
@@ -734,6 +793,8 @@ class MainWindow(QMainWindow):
         self.webcam_combo = QComboBox()
         self._populate_webcam_devices()
         self.webcam_combo.currentIndexChanged.connect(self._on_webcam_changed)
+        self.webcam_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.webcam_combo.setMinimumWidth(250)
         input_layout.addWidget(self.webcam_combo)
         
         self.video_button = QPushButton("Select Video File")
@@ -770,6 +831,8 @@ class MainWindow(QMainWindow):
         self.performance_combo.addItems(["Fast", "Balanced", "Quality"])
         self.performance_combo.setCurrentText("Balanced")
         self.performance_combo.currentTextChanged.connect(self._on_performance_changed)
+        self.performance_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.performance_combo.setMinimumWidth(250)
         render_layout.addWidget(self.performance_combo)
         
         # Depth model settings
@@ -780,6 +843,8 @@ class MainWindow(QMainWindow):
         self.depth_model_combo.addItems(["MiDaS Hybrid", "MiDaS Large", "Depth Anything V2 Small", "Depth Anything V2 Base", "Depth Anything V2 Large"])
         self.depth_model_combo.setCurrentText("MiDaS Hybrid")
         self.depth_model_combo.currentTextChanged.connect(self._on_depth_model_changed)
+        self.depth_model_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.depth_model_combo.setMinimumWidth(250)
         render_layout.addWidget(self.depth_model_combo)
         
         self.gaussian_count_label = QLabel("Gaussians: 0")
@@ -1248,9 +1313,9 @@ class MainWindow(QMainWindow):
                         count = gaussians.num_gaussians
                         self.gaussian_count_label.setText(f"Gaussians: {count}")
 
-                        # Update Gaussian preview widget
-                        if getattr(self, 'gaussian_preview', None) is not None:
-                            self.gaussian_preview.set_frame(frame)
+                        # Update 3D Gaussian Splat viewer with accumulated Gaussians
+                        if self.viewer_3d is not None and self.viewer_3d.is_available:
+                            self.viewer_3d.set_gaussians(gaussians)
 
                         # Update progress if available
                         if self.progress_tracker is not None:
@@ -1271,6 +1336,22 @@ class MainWindow(QMainWindow):
                         self.gaussian_count_label.setText("Gaussians: 0")
         except Exception as e:
             logger.error(f"Error handling frame ready: {e}", exc_info=True)
+    
+    def _update_3d_viewer(self) -> None:
+        """Periodically update 3D viewer with accumulated Gaussians."""
+        if self.processing_thread is None:
+            return
+        
+        try:
+            # Get accumulated Gaussians from processing thread
+            if (self.processing_thread.gaussian_merger is not None and
+                self.processing_thread.gaussian_merger.accumulated_gaussians is not None):
+                accumulated = self.processing_thread.gaussian_merger.accumulated_gaussians
+                if accumulated.num_gaussians > 0 and self.viewer_3d is not None and self.viewer_3d.is_available:
+                    # Update viewer with accumulated scene (builds up over time)
+                    self.viewer_3d.set_gaussians(accumulated)
+        except Exception as e:
+            logger.debug(f"Error updating 3D viewer: {e}")
     
     def _on_processing_error(self, error_msg: str) -> None:
         """Handle processing error."""

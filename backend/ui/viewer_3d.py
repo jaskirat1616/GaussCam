@@ -17,8 +17,9 @@ try:
     from OpenGL.GL import (
         glClear, glClearColor, glEnable, glDisable,
         GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST,
-        GL_POINTS, glPointSize, glBegin, glEnd, glVertex3f,
-        glColor3f, glMatrixMode, glLoadIdentity, glViewport,
+        GL_POINTS, GL_LINES, glPointSize, glLineWidth,
+        glBegin, glEnd, glVertex3f, glColor3f, glColor4f,
+        glMatrixMode, glLoadIdentity, glViewport,
         GL_PROJECTION, GL_MODELVIEW, GLfloat
     )
     try:
@@ -76,7 +77,16 @@ class Viewer3DWidget(QOpenGLWidget):
         self.gaussians = None
         self.positions = None
         self.colors = None
-        self.max_points = 50000  # Limit for performance in real-time
+        self.scales = None
+        self.opacities = None
+        self.max_points = 100000  # Increased limit for better visualization
+        self.point_size_scale = 1.0  # Scale factor for point sizes
+        
+        # Scene bounds for visualization
+        self.scene_bounds = None
+        self.scene_center = None
+        self.show_grid = True
+        self.show_axes = True
         
         # Update timer
         self.update_timer = QTimer(self)
@@ -85,6 +95,18 @@ class Viewer3DWidget(QOpenGLWidget):
         
         # Enable mouse tracking
         self.setMouseTracking(True)
+        
+        # Set tooltip for user interaction
+        self.setToolTip("3D Gaussian Splat Environment Viewer\n\n"
+                       "Controls:\n"
+                       "• Left-click and drag: Rotate camera\n"
+                       "• Mouse wheel: Zoom in/out\n"
+                       "\n"
+                       "Features:\n"
+                       "• Ground grid for spatial reference\n"
+                       "• Coordinate axes (RGB = XYZ)\n"
+                       "• Bounding box shows scene extent\n"
+                       "• Gaussians rendered with colors, scales, and opacity")
     
     def initializeGL(self):
         """Initialize OpenGL."""
@@ -94,8 +116,15 @@ class Viewer3DWidget(QOpenGLWidget):
         try:
             glClearColor(0.1, 0.1, 0.1, 1.0)
             glEnable(GL_DEPTH_TEST)
-            glPointSize(2.0)
-            logger.info("3D viewer initialized")
+            # Enable blending for opacity support
+            try:
+                from OpenGL.GL import GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, glBlendFunc
+                glEnable(GL_BLEND)
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            except:
+                pass
+            glPointSize(3.0)
+            logger.info("3D Gaussian Splat viewer initialized")
         except Exception as e:
             logger.error(f"Failed to initialize OpenGL: {e}", exc_info=True)
             self.is_available = False
@@ -130,8 +159,13 @@ class Viewer3DWidget(QOpenGLWidget):
             logger.error(f"Resize error: {e}", exc_info=True)
     
     def paintGL(self):
-        """Render scene."""
-        if not self.is_available or self.positions is None:
+        """Render Gaussian splats in 3D."""
+        if not self.is_available:
+            return
+        
+        if self.positions is None or len(self.positions) == 0:
+            # Draw empty scene
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
             return
         
         try:
@@ -141,33 +175,201 @@ class Viewer3DWidget(QOpenGLWidget):
             # Set up camera
             self._setup_camera()
             
-            # Draw Gaussians as points
+            # Draw scene reference (grid, axes, bounding box) first
+            if self.show_grid:
+                self._draw_grid()
+            if self.show_axes:
+                self._draw_axes()
+            self._draw_bounding_box()
+            
+            # Draw Gaussian splats
             if len(self.positions) > 0:
-                glBegin(GL_POINTS)
-                
                 # Limit points for performance
                 num_points = min(len(self.positions), self.max_points)
-                if self.colors is not None and len(self.colors) > 0:
-                    for i in range(num_points):
-                        pos = self.positions[i]
-                        if i < len(self.colors):
-                            col = self.colors[i]
-                            # Ensure colors are in [0, 1]
-                            if col.max() > 1.0:
-                                col = col / 255.0
+                
+                # Use larger point size for better scene visibility
+                base_point_size = 5.0 if num_points < 10000 else 4.0
+                glPointSize(base_point_size * self.point_size_scale)
+                
+                # Enable point smoothing for better appearance
+                try:
+                    from OpenGL.GL import GL_POINT_SMOOTH, glEnable
+                    glEnable(GL_POINT_SMOOTH)
+                except:
+                    pass
+                
+                glBegin(GL_POINTS)
+                
+                # Draw each Gaussian with proper color and size
+                for i in range(num_points):
+                    pos = self.positions[i]
+                    
+                    # Set color based on Gaussian color
+                    if self.colors is not None and i < len(self.colors):
+                        col = self.colors[i].copy()
+                        # Ensure colors are in [0, 1]
+                        if col.max() > 1.0:
+                            col = col / 255.0
+                        # Apply opacity if available (brighten/darken based on opacity)
+                        alpha = 1.0
+                        if self.opacities is not None and i < len(self.opacities):
+                            alpha = float(self.opacities[i])
+                            # Apply opacity as color intensity (simpler than alpha blending)
+                            col = col * (0.5 + 0.5 * alpha)
+                        try:
+                            glColor4f(col[0], col[1], col[2], alpha)
+                        except:
+                            # Fallback to RGB if 4f not available
                             glColor3f(col[0], col[1], col[2])
-                        else:
-                            glColor3f(1.0, 1.0, 1.0)
-                        glVertex3f(pos[0], pos[1], pos[2])
-                else:
-                    glColor3f(1.0, 1.0, 1.0)
-                    for i in range(num_points):
-                        pos = self.positions[i]
-                        glVertex3f(pos[0], pos[1], pos[2])
+                    else:
+                        glColor3f(1.0, 1.0, 1.0)
+                    
+                    # Draw point at Gaussian centroid
+                    glVertex3f(float(pos[0]), float(pos[1]), float(pos[2]))
                 
                 glEnd()
+                
+                # Draw scale indicators if available (as small lines)
+                if self.scales is not None and len(self.scales) > 0:
+                    glLineWidth(1.0)
+                    glBegin(GL_LINES)
+                    glColor3f(0.5, 0.5, 0.5)
+                    
+                    for i in range(min(num_points, len(self.scales))):
+                        pos = self.positions[i]
+                        scale = self.scales[i]
+                        # Draw scale as small line segments
+                        scale_mag = np.mean(scale) * 0.1 * self.point_size_scale
+                        glVertex3f(float(pos[0]), float(pos[1]), float(pos[2]))
+                        glVertex3f(float(pos[0] + scale_mag), float(pos[1]), float(pos[2]))
+                        glVertex3f(float(pos[0]), float(pos[1]), float(pos[2]))
+                        glVertex3f(float(pos[0]), float(pos[1] + scale_mag), float(pos[2]))
+                        glVertex3f(float(pos[0]), float(pos[1]), float(pos[2]))
+                        glVertex3f(float(pos[0]), float(pos[1]), float(pos[2] + scale_mag))
+                    
+                    glEnd()
         except Exception as e:
             logger.error(f"Render error: {e}", exc_info=True)
+    
+    def _draw_grid(self):
+        """Draw ground grid for spatial reference."""
+        if self.scene_bounds is None or self.scene_center is None:
+            return
+        
+        try:
+            # Compute grid size based on scene bounds
+            grid_size = max(np.max(self.scene_bounds), 1.0)
+            grid_spacing = max(grid_size / 15.0, 0.1)
+            grid_extent = grid_size * 1.2
+            
+            glLineWidth(1.0)
+            glBegin(GL_LINES)
+            glColor3f(0.4, 0.4, 0.4)  # Dark gray grid
+            
+            # Draw grid lines on ground plane (Y = scene center Y or minimum Y)
+            ground_y = float(self.scene_center[1])
+            center_x = float(self.scene_center[0])
+            center_z = float(self.scene_center[2])
+            
+            # Draw lines parallel to X axis (varying Z)
+            num_lines = int(grid_extent / grid_spacing) * 2 + 1
+            for i in range(-num_lines//2, num_lines//2 + 1):
+                z = center_z + i * grid_spacing
+                glVertex3f(center_x - grid_extent, ground_y, z)
+                glVertex3f(center_x + grid_extent, ground_y, z)
+            
+            # Draw lines parallel to Z axis (varying X)
+            for i in range(-num_lines//2, num_lines//2 + 1):
+                x = center_x + i * grid_spacing
+                glVertex3f(x, ground_y, center_z - grid_extent)
+                glVertex3f(x, ground_y, center_z + grid_extent)
+            
+            glEnd()
+        except Exception as e:
+            logger.debug(f"Grid drawing error: {e}")
+    
+    def _draw_axes(self):
+        """Draw coordinate axes for reference."""
+        if self.scene_center is None:
+            origin = np.array([0.0, 0.0, 0.0])
+        else:
+            origin = self.scene_center.copy()
+        
+        try:
+            axis_length = max(np.max(self.scene_bounds) if self.scene_bounds is not None else 1.0, 1.0) * 0.3
+            
+            glLineWidth(2.0)
+            glBegin(GL_LINES)
+            
+            # X axis (red)
+            glColor3f(1.0, 0.0, 0.0)
+            glVertex3f(float(origin[0]), float(origin[1]), float(origin[2]))
+            glVertex3f(float(origin[0] + axis_length), float(origin[1]), float(origin[2]))
+            
+            # Y axis (green)
+            glColor3f(0.0, 1.0, 0.0)
+            glVertex3f(float(origin[0]), float(origin[1]), float(origin[2]))
+            glVertex3f(float(origin[0]), float(origin[1] + axis_length), float(origin[2]))
+            
+            # Z axis (blue)
+            glColor3f(0.0, 0.0, 1.0)
+            glVertex3f(float(origin[0]), float(origin[1]), float(origin[2]))
+            glVertex3f(float(origin[0]), float(origin[1]), float(origin[2] + axis_length))
+            
+            glEnd()
+        except Exception as e:
+            logger.debug(f"Axes drawing error: {e}")
+    
+    def _draw_bounding_box(self):
+        """Draw bounding box around the scene to show 3D environment extent."""
+        if self.scene_bounds is None or self.scene_center is None:
+            return
+        
+        try:
+            center = self.scene_center
+            half_size = self.scene_bounds / 2.0
+            
+            # Compute box corners
+            min_corner = center - half_size
+            max_corner = center + half_size
+            
+            glLineWidth(1.5)
+            glBegin(GL_LINES)
+            glColor3f(0.6, 0.6, 0.6)  # Light gray for bounding box
+            
+            # Bottom face (4 edges)
+            glVertex3f(float(min_corner[0]), float(min_corner[1]), float(min_corner[2]))
+            glVertex3f(float(max_corner[0]), float(min_corner[1]), float(min_corner[2]))
+            glVertex3f(float(max_corner[0]), float(min_corner[1]), float(min_corner[2]))
+            glVertex3f(float(max_corner[0]), float(min_corner[1]), float(max_corner[2]))
+            glVertex3f(float(max_corner[0]), float(min_corner[1]), float(max_corner[2]))
+            glVertex3f(float(min_corner[0]), float(min_corner[1]), float(max_corner[2]))
+            glVertex3f(float(min_corner[0]), float(min_corner[1]), float(max_corner[2]))
+            glVertex3f(float(min_corner[0]), float(min_corner[1]), float(min_corner[2]))
+            
+            # Top face (4 edges)
+            glVertex3f(float(min_corner[0]), float(max_corner[1]), float(min_corner[2]))
+            glVertex3f(float(max_corner[0]), float(max_corner[1]), float(min_corner[2]))
+            glVertex3f(float(max_corner[0]), float(max_corner[1]), float(min_corner[2]))
+            glVertex3f(float(max_corner[0]), float(max_corner[1]), float(max_corner[2]))
+            glVertex3f(float(max_corner[0]), float(max_corner[1]), float(max_corner[2]))
+            glVertex3f(float(min_corner[0]), float(max_corner[1]), float(max_corner[2]))
+            glVertex3f(float(min_corner[0]), float(max_corner[1]), float(max_corner[2]))
+            glVertex3f(float(min_corner[0]), float(max_corner[1]), float(min_corner[2]))
+            
+            # Vertical edges (4 edges)
+            glVertex3f(float(min_corner[0]), float(min_corner[1]), float(min_corner[2]))
+            glVertex3f(float(min_corner[0]), float(max_corner[1]), float(min_corner[2]))
+            glVertex3f(float(max_corner[0]), float(min_corner[1]), float(min_corner[2]))
+            glVertex3f(float(max_corner[0]), float(max_corner[1]), float(min_corner[2]))
+            glVertex3f(float(min_corner[0]), float(min_corner[1]), float(max_corner[2]))
+            glVertex3f(float(min_corner[0]), float(max_corner[1]), float(max_corner[2]))
+            glVertex3f(float(max_corner[0]), float(min_corner[1]), float(max_corner[2]))
+            glVertex3f(float(max_corner[0]), float(max_corner[1]), float(max_corner[2]))
+            
+            glEnd()
+        except Exception as e:
+            logger.debug(f"Bounding box drawing error: {e}")
     
     def _setup_camera(self):
         """Set up camera view."""
@@ -198,10 +400,12 @@ class Viewer3DWidget(QOpenGLWidget):
             pass
     
     def set_gaussians(self, gaussians):
-        """Set Gaussian data to display."""
+        """Set Gaussian splat data to display in 3D."""
         if gaussians is None:
             self.positions = None
             self.colors = None
+            self.scales = None
+            self.opacities = None
             return
         
         try:
@@ -209,17 +413,51 @@ class Viewer3DWidget(QOpenGLWidget):
             # Use centroids as positions
             self.positions = gaussians.centroids
             
+            # Extract colors
             if hasattr(gaussians, 'colors'):
                 self.colors = gaussians.colors
             else:
                 self.colors = None
             
-            # Update camera target to center of scene
+            # Extract scales for visualization
+            if hasattr(gaussians, 'scales') and gaussians.scales is not None:
+                self.scales = gaussians.scales
+            else:
+                self.scales = None
+            
+            # Extract opacities for visualization
+            if hasattr(gaussians, 'opacity') and gaussians.opacity is not None:
+                self.opacities = gaussians.opacity
+            else:
+                self.opacities = None
+            
+            # Compute scene bounds and center for 3D environment visualization
             if len(self.positions) > 0:
-                self.camera_target = np.mean(self.positions, axis=0)
+                # Compute scene bounds
+                min_pos = np.min(self.positions, axis=0)
+                max_pos = np.max(self.positions, axis=0)
+                self.scene_bounds = max_pos - min_pos
+                self.scene_center = (min_pos + max_pos) / 2.0
+                
+                # Update camera target to center of scene
+                self.camera_target = self.scene_center.copy()
+                
                 # Adjust camera distance based on scene size
-                bounds = np.max(self.positions, axis=0) - np.min(self.positions, axis=0)
-                self.camera_distance = np.max(bounds) * 2.0
+                max_bound = np.max(self.scene_bounds)
+                if max_bound > 0:
+                    self.camera_distance = max_bound * 3.5  # Further back to see more of the environment
+                    # Reset camera angles for better initial view
+                    self.camera_angle_x = 20.0  # Slight angle down
+                    self.camera_angle_y = 45.0  # Angled view
+                else:
+                    self.camera_distance = 5.0
+                
+                # Adjust point size scale based on scene scale
+                if max_bound > 0:
+                    self.point_size_scale = max(0.8, min(3.0, 1.0 / (max_bound * 0.03)))
+            else:
+                self.scene_bounds = None
+                self.scene_center = None
             
             self.update()
         except Exception as e:
@@ -262,11 +500,29 @@ class Viewer3DWidget(QOpenGLWidget):
         self.update()
     
     def reset_view(self):
-        """Reset camera view."""
-        self.camera_angle_x = 0.0
-        self.camera_angle_y = 0.0
-        self.camera_distance = 5.0
-        if len(self.positions) > 0:
+        """Reset camera view to default angled view of the scene."""
+        self.camera_angle_x = 20.0  # Slight angle down
+        self.camera_angle_y = 45.0  # Angled view
+        if self.scene_center is not None:
+            self.camera_target = self.scene_center.copy()
+            if self.scene_bounds is not None:
+                max_bound = np.max(self.scene_bounds)
+                if max_bound > 0:
+                    self.camera_distance = max_bound * 3.5
+                else:
+                    self.camera_distance = 5.0
+            else:
+                self.camera_distance = 5.0
+        elif self.positions is not None and len(self.positions) > 0:
             self.camera_target = np.mean(self.positions, axis=0)
+            bounds = np.max(self.positions, axis=0) - np.min(self.positions, axis=0)
+            max_bound = np.max(bounds)
+            if max_bound > 0:
+                self.camera_distance = max_bound * 3.5
+            else:
+                self.camera_distance = 5.0
+        else:
+            self.camera_distance = 5.0
+            self.camera_target = np.array([0.0, 0.0, 0.0])
         self.update()
 
