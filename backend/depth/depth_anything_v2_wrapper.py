@@ -68,17 +68,18 @@ class DepthAnythingV2Estimator:
                 "transformers and Pillow required. Install with: pip install transformers pillow"
             )
         
+        # Try LiheYoung models first (more reliable on HuggingFace)
         model_map = {
-            'small': 'depth-anything/Depth-Anything-V2-Small-hf',
-            'base': 'depth-anything/Depth-Anything-V2-Base-hf',
-            'large': 'depth-anything/Depth-Anything-V2-Large-hf',
+            'small': 'LiheYoung/Depth-Anything-V2-Small-hf',
+            'base': 'LiheYoung/Depth-Anything-V2-Base-hf',
+            'large': 'LiheYoung/Depth-Anything-V2-Large-hf',
         }
         
         # Alternative model names if the above don't work
         alt_model_map = {
-            'small': 'LiheYoung/Depth-Anything-V2-Small-hf',
-            'base': 'LiheYoung/Depth-Anything-V2-Base-hf',
-            'large': 'LiheYoung/Depth-Anything-V2-Large-hf',
+            'small': 'depth-anything/Depth-Anything-V2-Small-hf',
+            'base': 'depth-anything/Depth-Anything-V2-Base-hf',
+            'large': 'depth-anything/Depth-Anything-V2-Large-hf',
         }
         
         if self.model_size not in model_map:
