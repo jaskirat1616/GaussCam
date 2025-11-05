@@ -36,6 +36,8 @@ class MPSRenderer(Renderer):
         self.device = device
         # Defer background color tensor creation to avoid Metal conflicts during init
         self._background_color = None
+        self._offset_cache: dict[int, torch.Tensor] = {}
+        self._max_kernel_radius: int = 32
         
         print(f"MPSRenderer initialized: {width}x{height} on {device}")
     
@@ -95,7 +97,7 @@ class MPSRenderer(Renderer):
         
         # Render using alpha blending
         image = self._render_gaussians(
-            uv, depths, scales, rotations, colors, opacities, self.width, self.height
+            uv, depths, scales, colors, opacities, self.width, self.height
         )
         
         # Convert to numpy
@@ -137,13 +139,25 @@ class MPSRenderer(Renderer):
         uv = points_proj[:, :2] / (depths.unsqueeze(1) + 1e-8)
         
         return uv, depths
+
+    def _get_offset_grid(self, radius: int) -> torch.Tensor:
+        """Get cached integer offset grid for a given radius."""
+        radius = int(max(1, min(radius, self._max_kernel_radius)))
+        cached = self._offset_cache.get(radius)
+        if cached is not None:
+            return cached
+
+        coords = torch.arange(-radius, radius + 1, device=self.device, dtype=torch.int64)
+        u_offsets, v_offsets = torch.meshgrid(coords, coords, indexing='ij')
+        offsets = torch.stack((u_offsets.reshape(-1), v_offsets.reshape(-1)), dim=1)
+        self._offset_cache[radius] = offsets
+        return offsets
     
     def _render_gaussians(
         self,
         uv: torch.Tensor,
         depths: torch.Tensor,
         scales: torch.Tensor,
-        rotations: torch.Tensor,
         colors: torch.Tensor,
         opacities: torch.Tensor,
         width: int,
@@ -156,109 +170,106 @@ class MPSRenderer(Renderer):
         
         # Sort by depth (back to front)
         sorted_indices = torch.argsort(depths, descending=True)
-        
-        # Render each Gaussian
         sorted_uv = uv[sorted_indices]
         sorted_depths = depths[sorted_indices]
         sorted_scales = scales[sorted_indices]
-        sorted_rotations = rotations[sorted_indices]
         sorted_colors = colors[sorted_indices]
         sorted_opacities = opacities[sorted_indices]
-        
-        # Create valid mask (wider bounds for 2D Gaussian rendering)
+
         valid_mask = (
             (sorted_uv[:, 0] >= -width) & (sorted_uv[:, 0] < 2 * width) &
             (sorted_uv[:, 1] >= -height) & (sorted_uv[:, 1] < 2 * height) &
             (sorted_depths > 0)
         )
-        
-        # Apply valid mask
+
         valid_indices_tensor = torch.where(valid_mask)[0]
-        
         if valid_indices_tensor.numel() == 0:
             return image
-        
+
         num_valid = valid_indices_tensor.numel()
-        
-        # If too many Gaussians, use simpler point-based rendering for speed
-        if num_valid > 5000:  # Lower threshold for faster rendering
-            # Fallback to faster point-based rendering
-            max_render = min(num_valid, 10000)  # Limit to 10K for speed
+        # Use fast point rendering for large counts or if explicitly requested
+        fast_threshold = 8000  # Lower threshold for faster rendering
+        if num_valid > fast_threshold:
+            max_render = min(num_valid, 8000)
             return self._render_points_fast(
-                sorted_uv, sorted_depths, sorted_colors, sorted_opacities, 
+                sorted_uv, sorted_depths, sorted_colors, sorted_opacities,
                 width, height, max_render
             )
-        
-        # Limit rendering for 2D Gaussian projection (slower but higher quality)
-        max_render = min(num_valid, 5000)
-        
-        # Render Gaussians with 2D projection (for smaller counts)
-        for i in range(min(max_render, num_valid)):
-            idx = valid_indices_tensor[i].item()
-            
-            u_center = sorted_uv[idx, 0].item()
-            v_center = sorted_uv[idx, 1].item()
-            depth = sorted_depths[idx].item()
+
+        alpha_flat = alpha_buffer.view(-1)
+        image_flat = image.view(-1, 3)
+        max_render = min(num_valid, 6000)  # Lower max for faster rendering
+
+        for idx_tensor in valid_indices_tensor[:max_render]:
+            idx = idx_tensor.item()
+
+            depth_val = torch.clamp(sorted_depths[idx], min=1e-4)
             scale = sorted_scales[idx]
-            rotation = sorted_rotations[idx]
             color = sorted_colors[idx]
-            opacity = sorted_opacities[idx].item()
-            
-            # Project 3D Gaussian to 2D (simplified - use scale as 2D radius)
-            # Compute 2D Gaussian radius from 3D scale and depth
-            radius_2d = max(scale[0].item(), scale[1].item(), scale[2].item()) * width / depth
-            radius_2d = min(radius_2d, width / 2.0)  # Limit radius
-            
-            # Compute bounding box
-            u_min = max(0, int(u_center - radius_2d))
-            u_max = min(width, int(u_center + radius_2d) + 1)
-            v_min = max(0, int(v_center - radius_2d))
-            v_max = min(height, int(v_center + radius_2d) + 1)
-            
-            if u_max <= u_min or v_max <= v_min:
+            opacity = sorted_opacities[idx]
+
+            radius_unclamped = torch.max(scale) * width / depth_val
+            radius_float = torch.clamp(radius_unclamped, min=1.0, max=float(max(width, height)))
+            radius_px = int(torch.round(torch.clamp(radius_float, max=float(self._max_kernel_radius))).item())
+            radius_px = max(1, min(radius_px, self._max_kernel_radius))
+
+            offsets = self._get_offset_grid(radius_px)
+
+            u_center = sorted_uv[idx, 0]
+            v_center = sorted_uv[idx, 1]
+
+            base_u = torch.round(u_center).to(torch.int64)
+            base_v = torch.round(v_center).to(torch.int64)
+
+            pixel_u = base_u + offsets[:, 0]
+            pixel_v = base_v + offsets[:, 1]
+
+            valid_pixel_mask = (
+                (pixel_u >= 0) & (pixel_u < width) &
+                (pixel_v >= 0) & (pixel_v < height)
+            )
+
+            if not torch.any(valid_pixel_mask):
                 continue
-            
-            # Render 2D Gaussian ellipse in bounding box
-            u_grid = torch.arange(u_min, u_max, device=self.device).float() + 0.5
-            v_grid = torch.arange(v_min, v_max, device=self.device).float() + 0.5
-            
-            # Create meshgrid - shape will be [u_size, v_size]
-            u_mesh, v_mesh = torch.meshgrid(u_grid, v_grid, indexing='ij')
-            
-            # Distance from center
-            du = u_mesh - u_center
-            dv = v_mesh - v_center
-            dist_sq = (du * du + dv * dv) / (radius_2d * radius_2d + 1e-8)
-            
-            # Gaussian weight (2D Gaussian) - shape [u_size, v_size]
-            weight = torch.exp(-dist_sq * 0.5)
-            weight = weight * opacity
-            
-            # Get slice shapes
-            u_size = u_max - u_min
-            v_size = v_max - v_min
-            
-            # meshgrid with indexing='ij' gives [u_size, v_size], but we need [v_size, u_size] for image indexing
-            # Transpose to match image buffer which is indexed as [height, width] = [v, u]
-            weight = weight.T  # Now shape [v_size, u_size]
-            
-            # Get current alpha values for this region - shape [v_size, u_size]
-            alpha_region = alpha_buffer[v_min:v_max, u_min:u_max]
-            
-            # Compute new alpha contribution - shape [v_size, u_size]
-            alpha_new = weight * (1.0 - alpha_region)
-            
-            # Apply to alpha buffer and image
-            alpha_buffer[v_min:v_max, u_min:u_max] += alpha_new
-            image[v_min:v_max, u_min:u_max] += color.unsqueeze(0).unsqueeze(0) * alpha_new.unsqueeze(-1)
-        
-        # Normalize by alpha
+
+            pixel_u = pixel_u[valid_pixel_mask]
+            pixel_v = pixel_v[valid_pixel_mask]
+            pixel_indices = (pixel_v * width + pixel_u).to(torch.int64)
+
+            pixel_center_u = pixel_u.to(torch.float32) + 0.5
+            pixel_center_v = pixel_v.to(torch.float32) + 0.5
+
+            du = pixel_center_u - u_center
+            dv = pixel_center_v - v_center
+
+            radius_sq = radius_float * radius_float + 1e-6
+            dist_sq = (du * du + dv * dv) / radius_sq
+            weights = torch.exp(-0.5 * dist_sq)
+            weights = torch.clamp(weights * opacity, min=0.0, max=1.0)
+
+            if weights.numel() == 0:
+                continue
+
+            current_alpha = alpha_flat.index_select(0, pixel_indices)
+            alpha_contrib = weights * (1.0 - current_alpha)
+
+            if torch.all(alpha_contrib <= 1e-7):
+                continue
+
+            alpha_flat.index_add_(0, pixel_indices, alpha_contrib)
+
+            color_contrib = alpha_contrib.unsqueeze(-1) * color.unsqueeze(0)
+            image_flat.index_add_(0, pixel_indices, color_contrib)
+
+        image = image_flat.view(height, width, 3)
+        alpha_buffer = alpha_flat.view(height, width)
+
         alpha_mask = alpha_buffer > 1e-8
-        image[alpha_mask] /= alpha_buffer[alpha_mask].unsqueeze(-1)
-        
-        # Blend with background
+        if torch.any(alpha_mask):
+            image[alpha_mask] /= alpha_buffer[alpha_mask].unsqueeze(-1)
+
         image = image + self.background_color.unsqueeze(0).unsqueeze(0) * (1.0 - alpha_buffer.unsqueeze(-1))
-        
+
         return image
     
     def _render_points_fast(

@@ -49,6 +49,20 @@ def test_gaussian_fitter():
     assert gaussians.scales.shape == (num_points, 3)
 
 
+def test_gaussian_fitter_knn_large_point_cloud():
+    """Ensure kNN fitting scales to larger point clouds without blowing memory."""
+    fitter = GaussianFitter(k_neighbors=6)
+
+    num_points = 5000
+    points = np.random.randn(num_points, 3).astype(np.float32)
+    colors = np.random.rand(num_points, 3).astype(np.float32)
+
+    gaussians = fitter.fit(points, colors, method="knn")
+
+    assert gaussians.num_gaussians == num_points
+    assert gaussians.scales.shape == (num_points, 3)
+
+
 def test_gaussian_merger():
     """Test Gaussian merger."""
     merger = GaussianMerger(merge_threshold=0.01, max_gaussians=1000)
@@ -68,6 +82,26 @@ def test_gaussian_merger():
     
     merged2 = merger.merge(gaussians2, merge_strategy="weighted")
     assert merged2.num_gaussians >= merged.num_gaussians
+
+
+def test_gaussian_merger_large_scale():
+    """Verify merger can process large Gaussian sets without O(N^2) memory."""
+    fitter = GaussianFitter()
+    merger = GaussianMerger(merge_threshold=0.05, max_gaussians=200000)
+
+    num_points = 4000
+    base_points = np.random.randn(num_points, 3).astype(np.float32) * 0.2
+    colors = np.random.rand(num_points, 3).astype(np.float32)
+
+    gaussians = fitter.fit(base_points, colors, method="knn")
+    merger.merge(gaussians, merge_strategy="weighted")
+
+    shifted = base_points + 0.01  # close enough to merge
+    gaussians_shifted = fitter.fit(shifted, colors, method="knn")
+    merged = merger.merge(gaussians_shifted, merge_strategy="weighted")
+
+    assert merged.num_gaussians <= gaussians.num_gaussians + gaussians_shifted.num_gaussians
+    assert merged.num_gaussians > 0
 
 
 def test_lod_manager():

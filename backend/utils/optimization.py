@@ -206,7 +206,7 @@ def batch_process_gaussians(
     gaussians_list: list,
     batch_size: int = 32,
     device: Optional[torch.device] = None,
-) -> torch.Tensor:
+) -> list[dict[str, torch.Tensor]]:
     """
     Batch process multiple Gaussian sets for efficient GPU usage.
     
@@ -216,12 +216,83 @@ def batch_process_gaussians(
         device: PyTorch device
     
     Returns:
-        Batched Gaussian tensor
+        List of dictionaries containing padded batched tensors per batch.
     """
+    if not gaussians_list:
+        return []
+
     if device is None:
         device = get_device()
-    
-    # TODO: Implement batch processing
-    # This would allow processing multiple frames simultaneously
-    pass
+
+    batches: list[dict[str, torch.Tensor]] = []
+
+    for start in range(0, len(gaussians_list), batch_size):
+        batch = gaussians_list[start : start + batch_size]
+        if not batch:
+            continue
+
+        max_gaussians = max(g.num_gaussians for g in batch)
+        if max_gaussians == 0:
+            continue
+
+        # Determine representation from first gaussian in batch
+        first_dict = batch[0].to_torch(device)
+        uses_quaternions = "scales" in first_dict and "rotations" in first_dict
+        uses_covariances = "covariances" in first_dict
+
+        batch_size_actual = len(batch)
+        centroids = torch.zeros((batch_size_actual, max_gaussians, 3), device=device)
+        colors = torch.zeros((batch_size_actual, max_gaussians, 3), device=device)
+        opacity = torch.zeros((batch_size_actual, max_gaussians), device=device)
+        mask = torch.zeros((batch_size_actual, max_gaussians), dtype=torch.bool, device=device)
+
+        scales = rotations = covariances = None
+        if uses_quaternions:
+            scales = torch.zeros((batch_size_actual, max_gaussians, 3), device=device)
+            rotations = torch.zeros((batch_size_actual, max_gaussians, 4), device=device)
+        elif uses_covariances:
+            covariances = torch.zeros((batch_size_actual, max_gaussians, 3, 3), device=device)
+
+        counts = torch.zeros(batch_size_actual, dtype=torch.int32, device=device)
+
+        for idx, gaussian in enumerate(batch):
+            data = gaussian.to_torch(device)
+            num = gaussian.num_gaussians
+            if num == 0:
+                continue
+
+            if uses_quaternions and ("scales" not in data or "rotations" not in data):
+                raise ValueError("Mixed Gaussian representations in batch (expected quaternion form).")
+            if uses_covariances and "covariances" not in data:
+                raise ValueError("Mixed Gaussian representations in batch (expected covariance form).")
+
+            centroids[idx, :num] = data["centroids"]
+            colors[idx, :num] = data["colors"]
+            opacity[idx, :num] = data["opacity"]
+            mask[idx, :num] = True
+            counts[idx] = num
+
+            if uses_quaternions and scales is not None and rotations is not None:
+                scales[idx, :num] = data["scales"]
+                rotations[idx, :num] = data["rotations"]
+            elif uses_covariances and covariances is not None:
+                covariances[idx, :num] = data["covariances"]
+
+        batch_dict: dict[str, torch.Tensor] = {
+            "centroids": centroids,
+            "colors": colors,
+            "opacity": opacity,
+            "mask": mask,
+            "counts": counts,
+        }
+
+        if scales is not None and rotations is not None:
+            batch_dict["scales"] = scales
+            batch_dict["rotations"] = rotations
+        if covariances is not None:
+            batch_dict["covariances"] = covariances
+
+        batches.append(batch_dict)
+
+    return batches
 

@@ -2,8 +2,15 @@
 Tests for GPU Detection
 """
 
-import pytest
-from backend.utils.gpu_detection import GPUDetector, get_gpu_detector, get_device, is_cuda, is_mps
+from backend.utils.gpu_detection import (
+    GPUBackend,
+    GPUDetector,
+    get_gpu_detector,
+    get_device,
+    is_cuda,
+    is_mps,
+    reset_gpu_detector,
+)
 
 
 def test_gpu_detector_initialization():
@@ -41,4 +48,20 @@ def test_device_info():
     assert "backend" in info
     assert "device_name" in info
     assert "platform" in info
+
+
+def test_available_backends_contains_cpu():
+    detector = GPUDetector()
+    assert GPUBackend.CPU in detector.get_available_backends()
+
+
+def test_forced_cpu_backend(monkeypatch):
+    monkeypatch.setenv("GAUSSCAM_BACKEND", "cpu")
+    reset_gpu_detector()
+    detector = get_gpu_detector()
+    assert detector.get_backend() == GPUBackend.CPU
+    assert detector.device_name == "CPU"
+    # Cleanup
+    monkeypatch.delenv("GAUSSCAM_BACKEND", raising=False)
+    reset_gpu_detector()
 

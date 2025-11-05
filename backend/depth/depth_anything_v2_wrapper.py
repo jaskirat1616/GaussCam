@@ -213,29 +213,32 @@ class DepthAnythingV2Estimator:
             logger.info(f"Transformers version: {transformers_version}")
         
         try:
-            # Try pipeline first (simpler API)
-            # If pipeline fails, try AutoModelForDepthEstimation (more control)
-            logger.info(f"Downloading model from HuggingFace (first time only)...")
-            logger.info(f"Model will be cached locally after download")
-            
-            # Use device=-1 for CPU/MPS (MPS doesn't work well with pipeline)
-            device_id = 0 if is_cuda() else -1
-            logger.debug(f"Using device_id={device_id} for pipeline")
-            
-            try:
-                # Try pipeline approach first
-                self.pipeline = pipeline(
-                    task="depth-estimation",
-                    model=model_name,
-                    device=device_id,
-                )
-                logger.info("Depth Anything V2 model loaded successfully via Transformers pipeline")
-            except Exception as pipeline_error:
-                error_msg = str(pipeline_error)
-                logger.warning(f"Pipeline loading failed: {error_msg}")
-                logger.info("Trying AutoModelForDepthEstimation approach...")
-                
-                # Fallback to AutoModelForDepthEstimation (more reliable)
+            logger.info("Downloading model from HuggingFace (first time only)...")
+            logger.info("Model will be cached locally after download")
+
+            use_pipeline = True
+            if is_mps() and not is_cuda():
+                logger.info("Skipping Transformers pipeline on MPS; using AutoModel for native GPU execution.")
+                use_pipeline = False
+
+            self.pipeline = None
+            if use_pipeline:
+                device_id = 0 if is_cuda() else -1
+                logger.debug(f"Using device_id={device_id} for pipeline")
+                try:
+                    self.pipeline = pipeline(
+                        task="depth-estimation",
+                        model=model_name,
+                        device=device_id,
+                    )
+                    logger.info("Depth Anything V2 model loaded successfully via Transformers pipeline")
+                except Exception as pipeline_error:
+                    error_msg = str(pipeline_error)
+                    logger.warning(f"Pipeline loading failed: {error_msg}")
+                    logger.info("Trying AutoModelForDepthEstimation approach...")
+                    self.pipeline = None
+
+            if self.pipeline is None:
                 try:
                     self.processor = AutoImageProcessor.from_pretrained(model_name)
                     self.model = AutoModelForDepthEstimation.from_pretrained(model_name)
@@ -245,8 +248,7 @@ class DepthAnythingV2Estimator:
                 except Exception as auto_error:
                     error_msg = str(auto_error)
                     logger.error(f"Failed to load {model_name}: {error_msg}")
-                    
-                    # Check if it's a model not found error
+
                     if "not a valid model identifier" in error_msg or "not a local folder" in error_msg:
                         logger.error(f"Model {model_name} is not available on HuggingFace.")
                         logger.error("This may be due to:")
@@ -267,16 +269,20 @@ class DepthAnythingV2Estimator:
                             f"Try updating transformers or install from repository: "
                             f"pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
                         )
+                    elif "'depth_anything'" in error_msg or "depth_anything" in error_msg.lower():
+                        logger.error("Transformers library doesn't recognize 'depth_anything' architecture.")
+                        logger.error("This means your transformers version is too old.")
+                        logger.error("Update transformers to the latest version:")
+                        logger.error("  pip install --upgrade transformers")
+                        logger.error("  or")
+                        logger.error("  pip install git+https://github.com/huggingface/transformers.git")
+                        raise ImportError(
+                            "Transformers version is too old for Depth Anything V2. "
+                            "Update transformers to a version >= 4.40.0"
+                        ) from auto_error
                     else:
-                        # Check for architecture recognition issues
-                        if "'depth_anything'" in error_msg or "depth_anything" in error_msg.lower():
-                            logger.error("Transformers library doesn't recognize 'depth_anything' architecture.")
-                            logger.error("This means your transformers version is too old.")
-                            logger.error("Update transformers to the latest version:")
-                            logger.error("  pip install --upgrade transformers")
-                            logger.error("  or")
-                            logger.error("  pip install git+https://github.com/huggingface/transformers.git")
-                        raise auto_error
+                        raise
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Failed to load Depth Anything V2 via Transformers: {error_msg}")
@@ -545,12 +551,22 @@ class DepthAnythingV2Estimator:
         
         # Process image
         inputs = self.processor(images=pil_image, return_tensors="pt")
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        autocast_enabled = self.device.type in {"cuda", "mps"}
+        inputs = {
+            k: v.to(self.device, non_blocking=True)
+            for k, v in inputs.items()
+        }
+        
+        if autocast_enabled and "pixel_values" in inputs and inputs["pixel_values"].dtype == torch.float32:
+            inputs["pixel_values"] = inputs["pixel_values"].to(torch.float16)
         
         # Predict depth
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            predicted_depth = outputs.predicted_depth
+        with torch.inference_mode():
+            if autocast_enabled:
+                with torch.autocast(device_type=self.device.type):
+                    predicted_depth = self.model(**inputs).predicted_depth
+            else:
+                predicted_depth = self.model(**inputs).predicted_depth
         
         # Interpolate to original size
         h, w = image.shape[:2]
@@ -600,17 +616,22 @@ class DepthAnythingV2Estimator:
         
         return depth.astype(np.float32)
     
-    def estimate_depth(self, image: np.ndarray) -> np.ndarray:
+    def estimate_depth(self, image: np.ndarray, postprocess: bool = True, postprocess_method: str = "normalize") -> np.ndarray:
         """
         Estimate depth from image.
         
         Args:
             image: RGB image as numpy array (H, W, 3)
+            postprocess: Whether to apply post-processing
+            postprocess_method: Post-processing method ('normalize', 'invert', 'smooth', 'improved')
         
         Returns:
             Depth map as numpy array (H, W) normalized to [0, 1]
         """
-        return self.predict(image)
+        depth = self.predict(image)
+        if postprocess:
+            depth = self.postprocess(depth, method=postprocess_method)
+        return depth
     
     def predict(self, image: np.ndarray) -> np.ndarray:
         """

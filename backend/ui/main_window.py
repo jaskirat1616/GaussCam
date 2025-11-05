@@ -89,6 +89,7 @@ class ProcessingThread(QThread):
         self.intrinsics = None
         self.gaussian_fitter = None
         self.gaussian_merger = None
+        self._last_gaussians = None
     
     def run(self) -> None:
         """Run processing loop."""
@@ -196,6 +197,7 @@ class ProcessingThread(QThread):
             performance_mode = "Balanced"
             if hasattr(self.parent(), 'performance_mode'):
                 performance_mode = self.parent().performance_mode
+            is_fast_mode = performance_mode == "Fast"
             
             # Initialize adaptive quality manager
             from backend.utils.adaptive_quality import AdaptiveQualityManager
@@ -209,13 +211,13 @@ class ProcessingThread(QThread):
             # Video files can be processed faster since they're not real-time
             is_video = self.input_source == "video"
             
-            if performance_mode == "Fast":
-                depth_skip_frames = 25 if is_video else 20  # More skipping for video
-                frame_skip = 20 if is_video else 10  # Process every 21st frame for video
-                max_gaussians = 2000  # Fewer Gaussians for speed
-                target_size = 240  # Smaller for speed
-                target_pixels = 12000  # More aggressive downsampling
-                voxel_size = 0.18  # Larger voxels
+            if is_fast_mode:
+                depth_skip_frames = 40 if is_video else 30
+                frame_skip = 30 if is_video else 15
+                max_gaussians = 800
+                target_size = 160  # Smaller for much faster depth
+                target_pixels = 6000  # More aggressive
+                voxel_size = 0.28  # Larger voxels
             elif performance_mode == "Quality":
                 depth_skip_frames = 10 if is_video else 5
                 frame_skip = 5 if is_video else 2
@@ -325,16 +327,20 @@ class ProcessingThread(QThread):
                             scale = min(target_size / h, target_size / w)
                             small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
                             small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-                            # Use improved post-processing for better accuracy
+                            # Skip post-processing in fast mode for speed
                             depth = self.depth_estimator.estimate_depth(
-                                small_frame, postprocess=True, postprocess_method="improved"
+                                small_frame, postprocess=(not is_fast_mode), postprocess_method="improved" if not is_fast_mode else "normalize"
                             )
-                            # Resize depth back to original size (use linear for speed)
-                            depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_LINEAR)
+                            # In fast mode, keep depth at smaller size for speed
+                            if not is_fast_mode:
+                                depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_LINEAR)
+                            else:
+                                # Store small depth for fast mode
+                                depth = depth
                         else:
-                            # Use improved post-processing for better accuracy
+                            # Skip post-processing in fast mode
                             depth = self.depth_estimator.estimate_depth(
-                                frame, postprocess=True, postprocess_method="improved"
+                                frame, postprocess=(not is_fast_mode), postprocess_method="improved" if not is_fast_mode else "normalize"
                             )
                         last_depth = depth
                         depth_time = time.time() - depth_start_time
@@ -353,33 +359,58 @@ class ProcessingThread(QThread):
                     # Reuse last depth
                     depth = last_depth
                 
-                # Convert to point cloud (with aggressive downsampling)
-                # Skip point cloud conversion if depth hasn't changed (for video)
+                # Convert depth directly to Gaussians (skip point cloud step)
+                # Skip if depth hasn't changed (for video)
                 if is_video and last_depth is not None and frame_count % depth_skip_frames != 0:
-                    # Reuse previous point cloud if depth hasn't changed
-                    print(f"Skipping point cloud conversion (reusing depth)...")
-                    # Use cached points from last frame if available
-                    if hasattr(self, '_last_points') and hasattr(self, '_last_colors'):
-                        points = self._last_points
-                        colors = self._last_colors
+                    # Reuse previous Gaussians if available
+                    if hasattr(self, '_last_gaussians') and self._last_gaussians is not None:
+                        gaussians = self._last_gaussians
                     else:
                         # Skip this frame entirely if no cached data
                         frame_count += 1
                         self.msleep(50)
                         continue
                 else:
-                    logger.info(f"Converting depth to point cloud (frame {frame_count})...")
+                    logger.info(f"Converting depth to Gaussians (frame {frame_count})...")
                     try:
-                        # Always downsample depth map first for speed
-                        h, w = depth.shape[:2]
-                        # Use adaptive target pixels based on performance mode
-                        if h * w > target_pixels:
-                            scale = np.sqrt(target_pixels / (h * w))
-                            small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
+                        # Get depth dimensions
+                        dh, dw = depth.shape[:2]
+                        fh, fw = frame.shape[:2]
+                        
+                        # Prepare intrinsics for depth size
+                        if is_fast_mode and (dh != fh or dw != fw):
+                            # Depth is already at smaller size, resize frame to match
+                            small_frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
+                            small_depth = depth
+                            # Update intrinsics for smaller size
+                            scale_factor = dw / fw
+                            from backend.utils.camera import CameraIntrinsics
+                            small_intrinsics = CameraIntrinsics(
+                                fx=self.intrinsics.fx * scale_factor,
+                                fy=self.intrinsics.fy * scale_factor,
+                                cx=self.intrinsics.cx * scale_factor,
+                                cy=self.intrinsics.cy * scale_factor,
+                                width=dw,
+                                height=dh,
+                            )
+                            # Convert directly to Gaussians (no intermediate point cloud)
+                            gaussians = self.gaussian_fitter.fit_from_depth(
+                                small_depth, small_frame, small_intrinsics,
+                                max_gaussians=max_gaussians,
+                                voxel_size=voxel_size,
+                                method="uniform",
+                                depth_scale=5.0,
+                                max_depth=10.0,
+                                use_gpu=True
+                            )
+                        elif dh * dw > target_pixels:
+                            # Need to downsample
+                            scale = np.sqrt(target_pixels / (dh * dw))
+                            small_h, small_w = max(1, int(dh * scale)), max(1, int(dw * scale))
                             small_depth = cv2.resize(depth, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
                             small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
                             # Update intrinsics for smaller size
-                            scale_factor = small_w / w
+                            scale_factor = small_w / dw
                             from backend.utils.camera import CameraIntrinsics
                             small_intrinsics = CameraIntrinsics(
                                 fx=self.intrinsics.fx * scale_factor,
@@ -389,69 +420,53 @@ class ProcessingThread(QThread):
                                 width=small_w,
                                 height=small_h,
                             )
-                            # Use GPU-accelerated version if available
-                            points, colors = depth_to_point_cloud(
-                                small_depth, small_frame, small_intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
-                            )
-                        else:
-                            # Use GPU-accelerated version if available
-                            points, colors = depth_to_point_cloud(
-                                depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
-                            )
-                        logger.info(f"Point cloud: {len(points)} points")
-                        
-                        # Cache points for video reuse
-                        if is_video:
-                            self._last_points = points
-                            self._last_colors = colors
-                        
-                        # Filter point cloud for accuracy (remove outliers) - skip if too slow
-                        if len(points) > 100 and len(points) < 50000:  # Skip filtering for very large point clouds
-                            from backend.utils.point_cloud import filter_point_cloud
-                            points, colors = filter_point_cloud(
-                                points, colors,
-                                min_depth=0.1,
+                            # Convert directly to Gaussians (no intermediate point cloud)
+                            gaussians = self.gaussian_fitter.fit_from_depth(
+                                small_depth, small_frame, small_intrinsics,
+                                max_gaussians=max_gaussians,
+                                voxel_size=voxel_size,
+                                method="uniform",
+                                depth_scale=5.0,
                                 max_depth=10.0,
-                                remove_outliers=True,
                                 use_gpu=True
                             )
-                            logger.debug(f"Filtered to {len(points)} points")
+                        else:
+                            # Convert directly to Gaussians (no intermediate point cloud)
+                            gaussians = self.gaussian_fitter.fit_from_depth(
+                                depth, frame, self.intrinsics,
+                                max_gaussians=max_gaussians,
+                                voxel_size=voxel_size,
+                                method="uniform",
+                                depth_scale=5.0,
+                                max_depth=10.0,
+                                use_gpu=True
+                            )
                         
-                        # Aggressive downsampling for speed (GPU-accelerated)
-                        if len(points) > 3000:  # Even lower threshold
-                            from backend.utils.point_cloud import downsample_point_cloud
-                            # Use adaptive voxel size based on performance mode
-                            points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size, use_gpu=True)
-                            logger.info(f"Downsampled to {len(points)} points")
-                            
-                            # Update cache
-                            if is_video:
-                                self._last_points = points
-                                self._last_colors = colors
+                        logger.info(f"Fitted {gaussians.num_gaussians} Gaussians")
+                        
+                        # Cache Gaussians for video reuse
+                        if is_video:
+                            self._last_gaussians = gaussians
                     except Exception as e:
-                        logger.error(f"Point cloud conversion error: {e}", exc_info=True)
+                        logger.error(f"Depth to Gaussian conversion error: {e}", exc_info=True)
                         # Skip this frame and continue
                         frame_count += 1
                         if not is_video:
                             self.msleep(100)
                         continue
                 
-                if len(points) > 0:
+                if gaussians.num_gaussians > 0:
                     try:
-                        # Fit Gaussians (use uniform method for speed)
-                        logger.info(f"Fitting Gaussians from {len(points)} points (max: {max_gaussians})...")
-                        # Use performance mode setting with GPU acceleration
-                        gaussians = self.gaussian_fitter.fit_downsampled(
-                            points, colors, max_gaussians=max_gaussians, method="uniform", use_gpu=True
-                        )
-                        logger.info(f"Fitted {gaussians.num_gaussians} Gaussians")
                         
-                        # Merge with accumulated
-                        logger.info(f"Merging Gaussians...")
-                        merged_gaussians = self.gaussian_merger.merge(
-                            gaussians, merge_strategy="weighted"
-                        )
-                        logger.info(f"Merged to {merged_gaussians.num_gaussians} total Gaussians")
+                        if is_fast_mode:
+                            self.gaussian_merger.accumulated_gaussians = gaussians
+                            merged_gaussians = gaussians
+                        else:
+                            logger.info("Merging Gaussians...")
+                            merged_gaussians = self.gaussian_merger.merge(
+                                gaussians, merge_strategy="weighted"
+                            )
+                            logger.info(f"Merged to {merged_gaussians.num_gaussians} total Gaussians")
                         
                         # Render
                         if self.renderer is not None and merged_gaussians.num_gaussians > 0:
@@ -513,9 +528,9 @@ class ProcessingThread(QThread):
                 # Small delay to prevent CPU spinning
                 # Less delay for video (no real-time requirement)
                 if is_video:
-                    self.msleep(50)  # Minimal delay for video processing
+                    self.msleep(30 if is_fast_mode else 80)
                 else:
-                    self.msleep(200)  # Delay for webcam to balance performance
+                    self.msleep(30 if is_fast_mode else 150)
         
         except KeyboardInterrupt:
             logger.warning("Processing interrupted by user")
@@ -630,35 +645,18 @@ class MainWindow(QMainWindow):
         )
         camera_layout.addWidget(self.render_placeholder)
         
-        # 3D Viewer below camera (optional, can be collapsed)
-        viewer_group = QGroupBox("3D Scene Viewer")
+        # Gaussian preview below render view (optional, can be collapsed)
+        viewer_group = QGroupBox("Gaussian Preview")
         viewer_group.setCheckable(True)
         viewer_group.setChecked(False)  # Collapsed by default
         viewer_group.setMaximumHeight(300)
         viewer_layout = QVBoxLayout()
         viewer_layout.setContentsMargins(5, 5, 5, 5)
         
-        try:
-            from backend.ui.viewer_3d import Viewer3DWidget
-            self.viewer_3d = Viewer3DWidget(self)
-            if self.viewer_3d.is_available:
-                viewer_layout.addWidget(self.viewer_3d)
-                self.viewer_3d.setMinimumHeight(200)
-                self.viewer_3d.setMaximumHeight(300)
-                logger.info("3D viewer initialized")
-            else:
-                viewer_label = QLabel("3D viewer not available (OpenGL required)")
-                viewer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                viewer_label.setStyleSheet("color: #888; padding: 20px;")
-                viewer_layout.addWidget(viewer_label)
-                self.viewer_3d = None
-        except Exception as e:
-            logger.warning(f"Failed to initialize 3D viewer: {e}")
-            viewer_label = QLabel("3D viewer not available")
-            viewer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            viewer_label.setStyleSheet("color: #888; padding: 20px;")
-            viewer_layout.addWidget(viewer_label)
-            self.viewer_3d = None
+        self.gaussian_preview = RenderWidget(self, width=320, height=240)
+        self.gaussian_preview.setMinimumSize(320, 200)
+        self.gaussian_preview.setMaximumHeight(280)
+        viewer_layout.addWidget(self.gaussian_preview)
         
         viewer_group.setLayout(viewer_layout)
         camera_layout.addWidget(viewer_group)
@@ -1250,9 +1248,9 @@ class MainWindow(QMainWindow):
                         count = gaussians.num_gaussians
                         self.gaussian_count_label.setText(f"Gaussians: {count}")
 
-                        # Update 3D viewer
-                        if self.viewer_3d is not None and self.viewer_3d.is_available:
-                            self.viewer_3d.set_gaussians(gaussians)
+                        # Update Gaussian preview widget
+                        if getattr(self, 'gaussian_preview', None) is not None:
+                            self.gaussian_preview.set_frame(frame)
 
                         # Update progress if available
                         if self.progress_tracker is not None:

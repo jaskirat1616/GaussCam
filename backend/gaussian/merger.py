@@ -5,8 +5,8 @@ Temporal Gaussian merging for frame-to-frame consistency and LOD management.
 """
 
 import numpy as np
-from typing import Optional, List, Tuple
-from scipy.spatial.distance import cdist
+from typing import Optional, List
+from scipy.spatial import cKDTree
 from backend.gaussian.fitter import Gaussian
 
 
@@ -80,15 +80,19 @@ class GaussianMerger:
         old = self.accumulated_gaussians
         new = new_gaussians
         
-        # Compute distances between old and new
-        distances = cdist(old.centroids, new.centroids)
-        
-        # Find nearest matches
-        matches = np.argmin(distances, axis=1)
-        match_distances = distances[np.arange(len(old.centroids)), matches]
-        
-        # Merge nearby Gaussians
-        merge_mask = match_distances < self.merge_threshold
+        if new.num_gaussians == 0:
+            return old
+
+        tree = cKDTree(new.centroids)
+        distances, matches = tree.query(
+            old.centroids,
+            k=1,
+            distance_upper_bound=self.merge_threshold,
+            workers=-1,
+        )
+        matches = matches.astype(np.int64, copy=False)
+
+        merge_mask = np.isfinite(distances)
         
         # Create merged arrays
         merged_centroids = []
