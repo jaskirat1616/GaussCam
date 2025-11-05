@@ -19,17 +19,19 @@ try:
         GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST,
         GL_POINTS, glPointSize, glBegin, glEnd, glVertex3f,
         glColor3f, glMatrixMode, glLoadIdentity, glViewport,
-        GL_PROJECTION, GL_MODELVIEW, GLfloat, gluPerspective
+        GL_PROJECTION, GL_MODELVIEW, GLfloat
     )
     try:
         from OpenGL import GLU
         GLU_AVAILABLE = True
     except ImportError:
         GLU_AVAILABLE = False
+        logger.warning("PyOpenGL GLU not available. 3D viewer may have limited functionality.")
     OPENGL_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     OPENGL_AVAILABLE = False
     GL = None
+    logger.warning(f"PyOpenGL not available. 3D viewer disabled. Install with: pip install PyOpenGL PyOpenGL-accelerate")
 
 from backend.utils.logging_config import get_logger
 

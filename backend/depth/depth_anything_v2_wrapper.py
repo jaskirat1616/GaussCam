@@ -103,23 +103,54 @@ class DepthAnythingV2Estimator:
             
             # Try primary model name first
             try:
+                # Use device=-1 for CPU/MPS (MPS doesn't work well with pipeline)
+                device_id = 0 if is_cuda() else -1
+                logger.debug(f"Using device_id={device_id} for pipeline")
+                
                 self.pipeline = pipeline(
                     task="depth-estimation",
                     model=model_name,
-                    device=0 if is_cuda() else -1 if is_mps() else -1,
+                    device=device_id,
                 )
                 logger.info("Depth Anything V2 model loaded successfully")
-            except Exception as e1:
-                # Try alternative model name if primary fails
-                logger.warning(f"Failed to load {model_name}, trying alternative name...")
+            except KeyError as ke:
+                # KeyError during model loading - likely model config issue
+                error_msg = str(ke)
+                logger.warning(f"KeyError loading {model_name}: {error_msg}")
+                logger.warning("This suggests the model may not be properly configured on HuggingFace.")
+                logger.warning("Trying alternative model name...")
+                
+                # Try alternative model name
                 alt_model_name = alt_model_map.get(self.model_size)
                 if alt_model_name:
-                    self.pipeline = pipeline(
-                        task="depth-estimation",
-                        model=alt_model_name,
-                        device=0 if is_cuda() else -1 if is_mps() else -1,
-                    )
-                    logger.info(f"Depth Anything V2 model loaded successfully (using alternative: {alt_model_name})")
+                    try:
+                        self.pipeline = pipeline(
+                            task="depth-estimation",
+                            model=alt_model_name,
+                            device=device_id,
+                        )
+                        logger.info(f"Depth Anything V2 model loaded successfully (using alternative: {alt_model_name})")
+                    except Exception as e2:
+                        logger.error(f"Alternative model also failed: {e2}")
+                        raise e2
+                else:
+                    raise ke
+            except Exception as e1:
+                # Try alternative model name if primary fails
+                logger.warning(f"Failed to load {model_name}: {e1}")
+                logger.warning("Trying alternative model name...")
+                alt_model_name = alt_model_map.get(self.model_size)
+                if alt_model_name:
+                    try:
+                        self.pipeline = pipeline(
+                            task="depth-estimation",
+                            model=alt_model_name,
+                            device=device_id,
+                        )
+                        logger.info(f"Depth Anything V2 model loaded successfully (using alternative: {alt_model_name})")
+                    except Exception as e2:
+                        logger.error(f"Alternative model also failed: {e2}")
+                        raise e2
                 else:
                     raise e1
         except Exception as e:
@@ -130,7 +161,9 @@ class DepthAnythingV2Estimator:
             if "'depth_anything'" in error_msg or "depth_anything" in error_msg.lower():
                 logger.error("This appears to be a model configuration issue.")
                 logger.error("The Depth Anything V2 models may not be available on HuggingFace.")
-                logger.error("Try using MiDaS models instead, or check HuggingFace model availability.")
+                logger.error("Note: Depth Anything V2 may require direct loading from the repository.")
+                logger.error("Try using MiDaS models instead, or install Depth Anything V2 directly:")
+                logger.error("  pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
             else:
                 logger.error("This may be due to:")
                 logger.error("  - Network connectivity issues")
