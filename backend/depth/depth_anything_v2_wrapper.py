@@ -12,11 +12,15 @@ import cv2
 from pathlib import Path
 
 try:
-    from transformers import pipeline
+    from transformers import pipeline, AutoImageProcessor, AutoModelForDepthEstimation
     from PIL import Image
+    TRANSFORMERS_AVAILABLE = True
 except ImportError:
     pipeline = None
+    AutoImageProcessor = None
+    AutoModelForDepthEstimation = None
     Image = None
+    TRANSFORMERS_AVAILABLE = False
 
 try:
     from depth_anything_v2.dpt import DepthAnythingV2
@@ -56,6 +60,7 @@ class DepthAnythingV2Estimator:
         self.checkpoint_path = checkpoint_path
         
         self.model = None
+        self.processor = None
         self.pipeline = None
         self.depth_anything_model = None
         
@@ -84,7 +89,7 @@ class DepthAnythingV2Estimator:
     
     def _load_transformers(self) -> None:
         """Load model using HuggingFace Transformers."""
-        if pipeline is None or Image is None:
+        if not TRANSFORMERS_AVAILABLE or Image is None:
             raise ImportError(
                 "transformers and Pillow required. Install with: pip install transformers pillow"
             )
@@ -98,80 +103,84 @@ class DepthAnythingV2Estimator:
             'large': 'depth-anything/Depth-Anything-V2-Large-hf',
         }
         
-        # Note: LiheYoung models are not available on HuggingFace
-        # If primary models fail, we should fall back to direct repository loading
-        
         if self.model_size not in model_map:
             raise ValueError(
                 f"Invalid model size: {self.model_size}. Must be 'small', 'base', or 'large'"
             )
         
         model_name = model_map.get(self.model_size)
-        if model_name is None:
-            raise ValueError(f"Invalid model size: {self.model_size}")
-        
         logger.info(f"Loading Depth Anything V2 ({self.model_size}) via Transformers...")
         logger.info(f"Model: {model_name}")
         logger.info(f"Device: {self.device}")
         
         try:
-            # Models are automatically downloaded from HuggingFace on first use
-            # and cached locally for future use
+            # Try pipeline first (simpler API)
+            # If pipeline fails, try AutoModelForDepthEstimation (more control)
             logger.info(f"Downloading model from HuggingFace (first time only)...")
             logger.info(f"Model will be cached locally after download")
             
-            # Try to load the official model
             # Use device=-1 for CPU/MPS (MPS doesn't work well with pipeline)
             device_id = 0 if is_cuda() else -1
             logger.debug(f"Using device_id={device_id} for pipeline")
             
             try:
+                # Try pipeline approach first
                 self.pipeline = pipeline(
                     task="depth-estimation",
                     model=model_name,
                     device=device_id,
                 )
-                logger.info("Depth Anything V2 model loaded successfully via Transformers")
-            except Exception as e1:
-                # Log the full error for debugging
-                error_msg = str(e1)
-                logger.error(f"Failed to load {model_name}: {error_msg}")
+                logger.info("Depth Anything V2 model loaded successfully via Transformers pipeline")
+            except Exception as pipeline_error:
+                error_msg = str(pipeline_error)
+                logger.warning(f"Pipeline loading failed: {error_msg}")
+                logger.info("Trying AutoModelForDepthEstimation approach...")
                 
-                # Check if it's a model not found error
-                if "not a valid model identifier" in error_msg or "not a local folder" in error_msg:
-                    logger.error(f"Model {model_name} is not available on HuggingFace.")
-                    logger.error("This may be due to:")
-                    logger.error("  - Model name is incorrect")
-                    logger.error("  - Model requires authentication (private repository)")
-                    logger.error("  - Network connectivity issues")
-                    logger.error("")
-                    logger.error("Try installing Depth Anything V2 directly from the repository:")
-                    logger.error("  pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
-                    raise ImportError(
-                        f"Depth Anything V2 model {model_name} not available on HuggingFace. "
-                        f"Install from repository: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
-                    )
-                else:
-                    # Other error (network, authentication, etc.)
-                    raise e1
+                # Fallback to AutoModelForDepthEstimation (more reliable)
+                try:
+                    self.processor = AutoImageProcessor.from_pretrained(model_name)
+                    self.model = AutoModelForDepthEstimation.from_pretrained(model_name)
+                    self.model.to(self.device)
+                    self.model.eval()
+                    logger.info("Depth Anything V2 model loaded successfully via AutoModelForDepthEstimation")
+                except Exception as auto_error:
+                    error_msg = str(auto_error)
+                    logger.error(f"Failed to load {model_name}: {error_msg}")
+                    
+                    # Check if it's a model not found error
+                    if "not a valid model identifier" in error_msg or "not a local folder" in error_msg:
+                        logger.error(f"Model {model_name} is not available on HuggingFace.")
+                        logger.error("This may be due to:")
+                        logger.error("  - Model name is incorrect")
+                        logger.error("  - Model requires authentication (private repository)")
+                        logger.error("  - Network connectivity issues")
+                        logger.error("  - Transformers version too old (need latest version)")
+                        logger.error("")
+                        logger.error("Try updating transformers:")
+                        logger.error("  pip install --upgrade transformers")
+                        logger.error("  or")
+                        logger.error("  pip install git+https://github.com/huggingface/transformers.git")
+                        logger.error("")
+                        logger.error("Or install Depth Anything V2 directly from repository:")
+                        logger.error("  pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
+                        raise ImportError(
+                            f"Depth Anything V2 model {model_name} not available on HuggingFace. "
+                            f"Try updating transformers or install from repository: "
+                            f"pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
+                        )
+                    else:
+                        # Check for architecture recognition issues
+                        if "'depth_anything'" in error_msg or "depth_anything" in error_msg.lower():
+                            logger.error("Transformers library doesn't recognize 'depth_anything' architecture.")
+                            logger.error("This means your transformers version is too old.")
+                            logger.error("Update transformers to the latest version:")
+                            logger.error("  pip install --upgrade transformers")
+                            logger.error("  or")
+                            logger.error("  pip install git+https://github.com/huggingface/transformers.git")
+                        raise auto_error
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Failed to load Depth Anything V2 via Transformers: {error_msg}")
-            
-            # Check if it's a KeyError with 'depth_anything' - this might be a model config issue
-            if "'depth_anything'" in error_msg or "depth_anything" in error_msg.lower():
-                logger.error("This appears to be a model configuration issue.")
-                logger.error("The Depth Anything V2 models may not be available on HuggingFace.")
-                logger.error("Note: Depth Anything V2 may require direct loading from the repository.")
-                logger.error("Try using MiDaS models instead, or install Depth Anything V2 directly:")
-                logger.error("  pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
-            else:
-                logger.error("This may be due to:")
-                logger.error("  - Network connectivity issues")
-                logger.error("  - Model not available on HuggingFace")
-                logger.error("  - HuggingFace authentication required")
-            
-            logger.error("Models are downloaded automatically from HuggingFace on first use.")
             raise
     
     def _load_direct(self) -> None:
@@ -294,9 +303,16 @@ class DepthAnythingV2Estimator:
     
     def _predict_transformers(self, image: np.ndarray) -> np.ndarray:
         """Predict depth using HuggingFace Transformers."""
-        if self.pipeline is None:
+        # Use pipeline if available, otherwise use AutoModel
+        if self.pipeline is not None:
+            return self._predict_pipeline(image)
+        elif self.model is not None and self.processor is not None:
+            return self._predict_automodel(image)
+        else:
             raise RuntimeError("Model not loaded. Call _load_transformers() first.")
-        
+    
+    def _predict_pipeline(self, image: np.ndarray) -> np.ndarray:
+        """Predict depth using Transformers pipeline."""
         # Convert to PIL Image (already in RGB format from preprocess)
         pil_image = Image.fromarray(image)
         
@@ -370,6 +386,38 @@ class DepthAnythingV2Estimator:
             raise ValueError(f"Expected 2D depth map, got shape {depth.shape}")
         
         # Normalize to [0, 1]
+        depth_min = depth.min()
+        depth_max = depth.max()
+        depth_range = depth_max - depth_min + 1e-8
+        depth = (depth - depth_min) / depth_range
+        
+        return depth.astype(np.float32)
+    
+    def _predict_automodel(self, image: np.ndarray) -> np.ndarray:
+        """Predict depth using AutoModelForDepthEstimation."""
+        # Convert to PIL Image (already in RGB format from preprocess)
+        pil_image = Image.fromarray(image)
+        
+        # Process image
+        inputs = self.processor(images=pil_image, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        
+        # Predict depth
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            predicted_depth = outputs.predicted_depth
+        
+        # Interpolate to original size
+        h, w = image.shape[:2]
+        prediction = torch.nn.functional.interpolate(
+            predicted_depth.unsqueeze(1),
+            size=(h, w),
+            mode="bicubic",
+            align_corners=False,
+        )
+        
+        # Convert to numpy and normalize
+        depth = prediction.squeeze().cpu().numpy()
         depth_min = depth.min()
         depth_max = depth.max()
         depth_range = depth_max - depth_min + 1e-8

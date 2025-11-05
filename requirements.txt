@@ -13,6 +13,8 @@ PySide6>=6.6.0
 gsplat>=0.1.0
 
 # Depth estimation
+# Note: For Depth Anything V2, may need latest transformers from GitHub:
+# pip install git+https://github.com/huggingface/transformers.git
 transformers>=4.30.0
 timm>=0.9.0
 # Depth Anything V2 (direct from repository - preferred)
