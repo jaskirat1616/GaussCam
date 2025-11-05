@@ -1,2 +1,2 @@
-"""PySide6 desktop GUI with real-time rendering."""
+"""PySide6 desktop GUI with rendering display."""
 
