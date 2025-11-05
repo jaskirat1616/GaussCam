@@ -345,7 +345,7 @@ class ProcessingThread(QThread):
                         self.msleep(50)
                         continue
                 else:
-                    print(f"Converting to point cloud...")
+                    logger.info(f"Converting depth to point cloud (frame {frame_count})...")
                     try:
                         # Always downsample depth map first for speed
                         h, w = depth.shape[:2]
@@ -375,15 +375,15 @@ class ProcessingThread(QThread):
                             points, colors = depth_to_point_cloud(
                                 depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
                             )
-                        logger.debug(f"Point cloud: {len(points)} points")
+                        logger.info(f"Point cloud: {len(points)} points")
                         
                         # Cache points for video reuse
                         if is_video:
                             self._last_points = points
                             self._last_colors = colors
                         
-                        # Filter point cloud for accuracy (remove outliers)
-                        if len(points) > 100:
+                        # Filter point cloud for accuracy (remove outliers) - skip if too slow
+                        if len(points) > 100 and len(points) < 50000:  # Skip filtering for very large point clouds
                             from backend.utils.point_cloud import filter_point_cloud
                             points, colors = filter_point_cloud(
                                 points, colors,
@@ -399,7 +399,7 @@ class ProcessingThread(QThread):
                             from backend.utils.point_cloud import downsample_point_cloud
                             # Use adaptive voxel size based on performance mode
                             points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size, use_gpu=True)
-                            logger.debug(f"Downsampled to {len(points)} points")
+                            logger.info(f"Downsampled to {len(points)} points")
                             
                             # Update cache
                             if is_video:
@@ -416,24 +416,24 @@ class ProcessingThread(QThread):
                 if len(points) > 0:
                     try:
                         # Fit Gaussians (use uniform method for speed)
-                        logger.debug(f"Fitting Gaussians from {len(points)} points...")
+                        logger.info(f"Fitting Gaussians from {len(points)} points (max: {max_gaussians})...")
                         # Use performance mode setting with GPU acceleration
                         gaussians = self.gaussian_fitter.fit_downsampled(
                             points, colors, max_gaussians=max_gaussians, method="uniform", use_gpu=True
                         )
-                        logger.debug(f"Fitted {gaussians.num_gaussians} Gaussians")
+                        logger.info(f"Fitted {gaussians.num_gaussians} Gaussians")
                         
                         # Merge with accumulated
-                        logger.debug(f"Merging Gaussians...")
+                        logger.info(f"Merging Gaussians...")
                         merged_gaussians = self.gaussian_merger.merge(
                             gaussians, merge_strategy="weighted"
                         )
-                        logger.debug(f"Merged to {merged_gaussians.num_gaussians} Gaussians")
+                        logger.info(f"Merged to {merged_gaussians.num_gaussians} total Gaussians")
                         
                         # Render
                         if self.renderer is not None and merged_gaussians.num_gaussians > 0:
                             try:
-                                logger.debug(f"Rendering {merged_gaussians.num_gaussians} Gaussians...")
+                                logger.info(f"Rendering {merged_gaussians.num_gaussians} Gaussians...")
                                 rendered = self.renderer.render(merged_gaussians)
                                 logger.debug(
                                     f"Rendered frame: shape={rendered.shape}, "
@@ -443,6 +443,7 @@ class ProcessingThread(QThread):
                                 last_rendered = rendered.copy()
                                 # Emit frame for display
                                 self.frame_ready.emit(rendered)
+                                logger.debug(f"Frame {frame_count} rendered successfully")
                             except Exception as e:
                                 logger.error(f"Rendering error: {e}", exc_info=True)
                                 # Don't exit on rendering error - continue processing
