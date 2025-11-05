@@ -83,16 +83,35 @@ class DepthAnythingV2Estimator:
             try:
                 logger.info(f"Attempting direct loading from repository...")
                 self._load_direct()
+                # Verify model was actually loaded
+                if self.depth_anything_model is None:
+                    raise RuntimeError("Direct loading completed but model is None")
                 logger.info(f"Loaded Depth Anything V2 ({model_size}) directly from repository")
+                self.use_transformers = False  # Ensure flag is set correctly
             except Exception as e:
                 logger.warning(f"Direct loading failed: {e}", exc_info=True)
                 logger.info("Falling back to HuggingFace Transformers...")
+                
+                # Reset direct loading state
+                self.depth_anything_model = None
                 
                 # Check if transformers version is compatible before trying
                 if TRANSFORMERS_AVAILABLE and TRANSFORMERS_VERSION_OK:
                     if pipeline is not None:
                         self.use_transformers = True  # Switch to Transformers mode
-                        self._load_transformers()
+                        try:
+                            self._load_transformers()
+                            # Verify Transformers was actually loaded
+                            if self.pipeline is None and (self.model is None or self.processor is None):
+                                raise RuntimeError("Transformers loading completed but model is None")
+                            logger.info("Successfully loaded via Transformers")
+                        except Exception as te:
+                            logger.error(f"Transformers loading also failed: {te}")
+                            raise ImportError(
+                                f"Both direct loading and Transformers failed. "
+                                f"Direct error: {e}. Transformers error: {te}. "
+                                f"Install Depth Anything V2: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
+                            )
                     else:
                         raise ImportError(
                             f"Neither direct loading nor Transformers available. "
@@ -552,10 +571,19 @@ class DepthAnythingV2Estimator:
         """
         image = self.preprocess(image)
         
-        if self.use_transformers:
+        # Determine which method to use based on what's actually loaded
+        if self.pipeline is not None or (self.model is not None and self.processor is not None):
+            # Transformers is loaded
             depth = self._predict_transformers(image)
-        else:
+        elif self.depth_anything_model is not None:
+            # Direct model is loaded
             depth = self._predict_direct(image)
+        else:
+            raise RuntimeError(
+                "No model loaded. "
+                "Either direct loading or Transformers loading must succeed. "
+                "Check initialization logs for errors."
+            )
         
         return depth
     
