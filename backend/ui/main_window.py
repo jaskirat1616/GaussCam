@@ -128,9 +128,11 @@ class ProcessingThread(QThread):
             
             # Frame preprocessor
             preprocessor = FramePreprocessor(normalize=True, to_rgb=True)
-            self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=2)
+            # Use larger queue for video to handle slow processing
+            queue_size = 10 if self.input_source == "video" else 2
+            self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=queue_size)
             self.async_capture.start()
-            logger.info(f"Async capture started for {self.input_source}")
+            logger.info(f"Async capture started for {self.input_source} (queue size: {queue_size})")
             
             # Depth estimator - load based on selected model
             logger.info(f"Loading depth model: {self.depth_model}...")

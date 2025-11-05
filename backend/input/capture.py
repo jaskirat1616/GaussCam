@@ -289,16 +289,29 @@ class AsyncFrameCapture:
             ret, frame = self.capture.read()
             
             if not ret:
+                # For video, check if we're actually at the end
+                # For webcam, just break
+                if hasattr(self.capture, 'loop') and self.capture.loop:
+                    # Video looping - reset position
+                    if hasattr(self.capture, 'cap') and self.capture.cap is not None:
+                        self.capture.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
                 break
             
             # Preprocess frame
             processed = self.preprocessor.process(frame)
             
-            # Put in queue (non-blocking, drop frame if queue full)
+            # Put in queue (blocking with timeout for video, non-blocking for webcam)
+            # For video, wait longer to avoid dropping frames
+            timeout = 1.0 if hasattr(self.capture, 'video_path') else 0.0
             try:
-                self.queue.put_nowait(processed)
+                if timeout > 0:
+                    self.queue.put(processed, timeout=timeout)
+                else:
+                    self.queue.put_nowait(processed)
             except:
-                # Queue full, skip frame
+                # Queue full or timeout - skip frame
+                # This is okay for webcam, but for video we should try harder
                 pass
     
     def read(self, timeout: float = 0.1) -> Optional[np.ndarray]:
