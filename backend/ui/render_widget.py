@@ -26,9 +26,8 @@ class RenderWidget(QWidget):
             height: Display height
         """
         super().__init__(parent)
-        self.width = width
-        self.height = height
-        
+        # Don't store width/height as attributes - they shadow QWidget methods
+        # Use setMinimumSize instead
         self.current_frame: Optional[np.ndarray] = None
         self.setMinimumSize(width, height)
         
