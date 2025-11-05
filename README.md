@@ -198,6 +198,19 @@ pytest backend/tests/
 black backend/
 ```
 
+## Production Features
+
+GaussCam includes production-ready features:
+
+- **Logging**: Structured logging with file rotation (`logs/gausscam.log`)
+- **Configuration**: Centralized configuration management (`config.json`)
+- **Validation**: Comprehensive input validation
+- **Progress Tracking**: Real-time progress updates and statistics
+- **Error Handling**: Robust error handling with logging
+- **Status Bar**: Real-time status updates and progress indicators
+
+See [PRODUCTION.md](PRODUCTION.md) for details.
+
 ## License
 
 MIT License
