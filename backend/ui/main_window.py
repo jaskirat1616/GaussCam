@@ -541,7 +541,8 @@ class MainWindow(QMainWindow):
             self.config = AppConfig()
         
         self.setWindowTitle("GaussCam - Gaussian Splatting Renderer")
-        self.setMinimumSize(
+        self.setMinimumSize(1000, 600)
+        self.resize(
             self.config.window_width,
             self.config.window_height
         )
