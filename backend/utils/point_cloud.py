@@ -158,7 +158,7 @@ def filter_point_cloud(
     use_gpu: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Filter point cloud by depth and optionally remove outliers (improved accuracy).
+    Filter point cloud by depth and optionally remove outliers.
     
     Args:
         points: Point cloud (N, 3)
@@ -179,7 +179,7 @@ def filter_point_cloud(
     colors = colors[depth_mask]
     
     if remove_outliers and len(points) > 0:
-        # Improved statistical outlier removal
+        # Statistical outlier removal
         try:
             if use_gpu:
                 # Try GPU-accelerated outlier removal

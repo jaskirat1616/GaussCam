@@ -199,7 +199,7 @@
    - Camera pose refinement
    - Gaussian optimization
 
-5. **Advanced SLAM**
+5. **SLAM**
    - ORB-SLAM3 integration
    - Loop closure detection
    - Relocalization
