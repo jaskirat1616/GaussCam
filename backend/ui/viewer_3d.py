@@ -53,9 +53,11 @@ class Viewer3DWidget(QOpenGLWidget):
         self.is_available = True
         
         # Set OpenGL format
+        # Use Compatibility Profile to support deprecated fixed-function pipeline
+        # (glMatrixMode, glBegin, glEnd, etc.)
         fmt = QSurfaceFormat()
-        fmt.setVersion(3, 3)
-        fmt.setProfile(QSurfaceFormat.CoreProfile)
+        fmt.setVersion(2, 1)  # Use OpenGL 2.1 for compatibility
+        fmt.setProfile(QSurfaceFormat.CompatibilityProfile)  # Compatibility profile
         fmt.setDepthBufferSize(24)
         fmt.setSamples(4)  # Anti-aliasing
         self.setFormat(fmt)
