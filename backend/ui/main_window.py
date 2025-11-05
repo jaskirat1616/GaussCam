@@ -5,6 +5,7 @@ PySide6 main window for GaussCam application.
 """
 
 import numpy as np
+import cv2
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -104,10 +105,16 @@ class ProcessingThread(QThread):
             self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=2)
             self.async_capture.start()
             
-            # Depth estimator
+            # Depth estimator (use smaller model for speed)
             print("Loading MiDaS depth model...")
-            self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-large")
-            print("MiDaS model loaded")
+            # Use hybrid model for better speed/quality balance
+            try:
+                self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-hybrid-midas")
+                print("MiDaS hybrid model loaded (faster)")
+            except:
+                # Fallback to large model
+                self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-large")
+                print("MiDaS large model loaded")
             
             # Camera intrinsics
             self.intrinsics = CameraIntrinsics.default(width, height, fov=60.0)
@@ -118,8 +125,11 @@ class ProcessingThread(QThread):
             
             print(f"Processing started: {self.input_source}")
             
-            # Processing loop
+            # Processing loop with optimizations
             frame_count = 0
+            depth_skip_frames = 3  # Process depth every N frames
+            last_depth = None
+            
             while not self.stop_flag:
                 # Read frame
                 frame = self.async_capture.read(timeout=0.1)
@@ -127,7 +137,7 @@ class ProcessingThread(QThread):
                     if self.input_source == "video":
                         # End of video
                         break
-                    self.msleep(10)  # Small delay if no frame
+                    self.msleep(10)
                     continue
                 
                 # Convert to numpy if needed
@@ -142,19 +152,42 @@ class ProcessingThread(QThread):
                     else:
                         frame = frame.astype(np.float32)
                 
-                # Estimate depth
-                try:
-                    depth = self.depth_estimator.estimate_depth(frame, postprocess=True)
-                except Exception as e:
-                    print(f"Depth estimation error: {e}")
-                    self.msleep(100)
-                    continue
+                # Estimate depth (skip frames for speed)
+                if frame_count % depth_skip_frames == 0 or last_depth is None:
+                    try:
+                        # Resize frame for faster depth estimation (if too large)
+                        h, w = frame.shape[:2]
+                        if h > 480 or w > 640:
+                            scale = min(480 / h, 640 / w)
+                            small_h, small_w = int(h * scale), int(w * scale)
+                            small_frame = cv2.resize(frame, (small_w, small_h))
+                            depth = self.depth_estimator.estimate_depth(small_frame, postprocess=True)
+                            depth = cv2.resize(depth, (w, h))
+                        else:
+                            depth = self.depth_estimator.estimate_depth(frame, postprocess=True)
+                        last_depth = depth
+                    except Exception as e:
+                        print(f"Depth estimation error: {e}")
+                        if last_depth is not None:
+                            depth = last_depth
+                        else:
+                            self.msleep(100)
+                            continue
+                else:
+                    # Reuse last depth
+                    depth = last_depth
                 
-                # Convert to point cloud
+                # Convert to point cloud (with aggressive downsampling)
                 try:
                     points, colors = depth_to_point_cloud(
                         depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
                     )
+                    
+                    # Aggressive downsampling for speed
+                    if len(points) > 10000:
+                        from backend.utils.point_cloud import downsample_point_cloud
+                        voxel_size = 0.05  # Larger voxels for speed
+                        points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size)
                 except Exception as e:
                     print(f"Point cloud conversion error: {e}")
                     self.msleep(100)
@@ -162,9 +195,9 @@ class ProcessingThread(QThread):
                 
                 if len(points) > 0:
                     try:
-                        # Fit Gaussians
+                        # Fit Gaussians (use uniform method for speed)
                         gaussians = self.gaussian_fitter.fit_downsampled(
-                            points, colors, max_gaussians=50000, method="pca"
+                            points, colors, max_gaussians=20000, method="uniform"  # Reduced count and faster method
                         )
                         
                         # Merge with accumulated
@@ -186,11 +219,19 @@ class ProcessingThread(QThread):
                         print(f"Gaussian fitting/merging error: {e}")
                         import traceback
                         traceback.print_exc()
+                else:
+                    # Emit last frame or blank frame if no points
+                    if self.renderer is not None and self.gaussian_merger.accumulated_gaussians is not None:
+                        try:
+                            rendered = self.renderer.render(self.gaussian_merger.accumulated_gaussians)
+                            self.frame_ready.emit(rendered)
+                        except:
+                            pass
                 
                 frame_count += 1
                 
-                # Small delay to prevent CPU spinning (~30 FPS)
-                self.msleep(33)
+                # Small delay to prevent CPU spinning (~15-30 FPS)
+                self.msleep(50)  # Reduced from 33ms for better performance
         
         except Exception as e:
             import traceback

@@ -184,13 +184,21 @@ class MPSRenderer(Renderer):
             colors_valid = sorted_colors[valid_indices_tensor]
             opacities_valid = sorted_opacities[valid_indices_tensor]
             
-            # Render valid Gaussians
+            # Render valid Gaussians (limit to first N for speed)
             num_valid = valid_indices_tensor.numel()
-            for i in range(num_valid):
-                u_int = u_valid[i].item()
-                v_int = v_valid[i].item()
-                color = colors_valid[i]
-                opacity = opacities_valid[i].item()
+            max_render = min(num_valid, 50000)  # Limit rendering for speed
+            
+            # Use vectorized operations where possible
+            u_valid_limited = u_valid[:max_render]
+            v_valid_limited = v_valid[:max_render]
+            colors_valid_limited = colors_valid[:max_render]
+            opacities_valid_limited = opacities_valid[:max_render]
+            
+            for i in range(max_render):
+                u_int = u_valid_limited[i].item()
+                v_int = v_valid_limited[i].item()
+                color = colors_valid_limited[i]
+                opacity = opacities_valid_limited[i].item()
                 
                 # Alpha blending
                 if alpha_buffer[v_int, u_int] < 1.0:
