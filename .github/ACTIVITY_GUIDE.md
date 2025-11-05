@@ -1,6 +1,6 @@
 # GitHub Activity Guide
 
-This guide helps you diversify your GitHub activity beyond just commits.
+This guide helps diversify GitHub activity beyond just commits.
 
 ## Current Activity Types Created
 
@@ -14,7 +14,7 @@ This guide helps you diversify your GitHub activity beyond just commits.
 ✅ **Discussions** - Configuration for discussions
 ✅ **Releases** - Release configuration
 
-## How to Create More Activity Types
+## How to Create Activity Types
 
 ### 1. Create Pull Requests (PRs)
 
