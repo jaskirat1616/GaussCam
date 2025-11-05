@@ -9,6 +9,7 @@ import torch
 from typing import Optional
 from backend.renderer.base import Renderer
 from backend.gaussian.fitter import Gaussian
+from backend.gaussian.four_d import Gaussian4D
 from backend.utils.gpu_detection import get_device, is_cuda
 
 try:
@@ -53,6 +54,7 @@ class CUDARenderer(Renderer):
         gaussians: Gaussian,
         camera_pose: Optional[np.ndarray] = None,
         intrinsics: Optional[np.ndarray] = None,
+        **kwargs,
     ) -> np.ndarray:
         """
         Render Gaussians using gsplat.
@@ -137,6 +139,17 @@ class CUDARenderer(Renderer):
             # Return black image on error
             return np.zeros((self.height, self.width, 3), dtype=np.float32)
     
+    def render_dynamic(
+        self,
+        gaussians: Gaussian4D,
+        time_offset: float = 0.0,
+        camera_pose: Optional[np.ndarray] = None,
+        intrinsics: Optional[np.ndarray] = None,
+        **kwargs,
+    ) -> np.ndarray:
+        # TODO: integrate motion field into gsplat when API permits.
+        return super().render_dynamic(gaussians, time_offset, camera_pose, intrinsics, **kwargs)
+
     def resize(self, width: int, height: int) -> None:
         """Resize render buffer."""
         self.width = width
@@ -146,4 +159,10 @@ class CUDARenderer(Renderer):
         """Clear render buffer."""
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    @property
+    def capabilities(self):
+        caps = super().capabilities.copy()
+        caps.update({"dynamic_gaussians": True})
+        return caps
 

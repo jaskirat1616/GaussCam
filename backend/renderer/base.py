@@ -5,9 +5,12 @@ Abstract renderer for Gaussian Splatting with CUDA and MPS backends.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
+
 import numpy as np
-from typing import Optional, Tuple
+
 from backend.gaussian.fitter import Gaussian
+from backend.gaussian.four_d import Gaussian4D
 
 
 class Renderer(ABC):
@@ -30,6 +33,7 @@ class Renderer(ABC):
         gaussians: Gaussian,
         camera_pose: Optional[np.ndarray] = None,
         intrinsics: Optional[np.ndarray] = None,
+        **kwargs: Any,
     ) -> np.ndarray:
         """
         Render Gaussians.
@@ -44,6 +48,23 @@ class Renderer(ABC):
         """
         raise NotImplementedError
     
+    def render_dynamic(
+        self,
+        gaussians: Gaussian4D,
+        time_offset: float = 0.0,
+        camera_pose: Optional[np.ndarray] = None,
+        intrinsics: Optional[np.ndarray] = None,
+        **kwargs: Any,
+    ) -> np.ndarray:
+        """Render dynamic (4D) Gaussians. Default falls back to static render."""
+
+        return self.render(
+            gaussians=gaussians.gaussian,
+            camera_pose=camera_pose,
+            intrinsics=intrinsics,
+            **kwargs,
+        )
+
     @abstractmethod
     def resize(self, width: int, height: int) -> None:
         """Resize render buffer."""
@@ -52,4 +73,14 @@ class Renderer(ABC):
     def clear(self) -> None:
         """Clear render buffer (optional)."""
         pass
+
+    @property
+    def capabilities(self) -> Dict[str, bool]:
+        """Report backend capabilities (dynamic splatting, web streaming, etc.)."""
+
+        return {
+            "dynamic_gaussians": False,
+            "multi_channel": False,
+            "web_stream": False,
+        }
 

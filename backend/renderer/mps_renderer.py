@@ -8,8 +8,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import Optional
+
 from backend.renderer.base import Renderer
 from backend.gaussian.fitter import Gaussian
+from backend.gaussian.four_d import Gaussian4D
 from backend.utils.gpu_detection import get_device, is_mps
 
 
@@ -53,6 +55,7 @@ class MPSRenderer(Renderer):
         gaussians: Gaussian,
         camera_pose: Optional[np.ndarray] = None,
         intrinsics: Optional[np.ndarray] = None,
+        **kwargs,
     ) -> np.ndarray:
         """
         Render Gaussians using PyTorch MPS operations.
@@ -354,6 +357,26 @@ class MPSRenderer(Renderer):
         
         return image
     
+    def render_dynamic(
+        self,
+        gaussians: Gaussian4D,
+        time_offset: float = 0.0,
+        camera_pose: Optional[np.ndarray] = None,
+        intrinsics: Optional[np.ndarray] = None,
+        **kwargs,
+    ) -> np.ndarray:
+        # Apply simple Euler integration for centroid motion as placeholder.
+        motion = gaussians.motion.translation * time_offset
+        animated = Gaussian(
+            centroids=gaussians.gaussian.centroids + motion,
+            covariances=None,
+            colors=gaussians.gaussian.colors,
+            opacity=gaussians.gaussian.opacity,
+            scales=gaussians.gaussian.scales,
+            rotations=gaussians.gaussian.rotations,
+        )
+        return self.render(animated, camera_pose, intrinsics, **kwargs)
+
     def resize(self, width: int, height: int) -> None:
         """Resize render buffer."""
         self.width = width
@@ -363,4 +386,10 @@ class MPSRenderer(Renderer):
         """Clear render buffer."""
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
+
+    @property
+    def capabilities(self):
+        caps = super().capabilities.copy()
+        caps.update({"dynamic_gaussians": True})
+        return caps
 
