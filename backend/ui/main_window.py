@@ -649,7 +649,51 @@ class MainWindow(QMainWindow):
     def _create_control_panel(self) -> QWidget:
         """Create control panel."""
         panel = QWidget()
+        panel.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #555;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+            QPushButton {
+                background-color: #4a4a4a;
+                color: white;
+                border: 1px solid #666;
+                border-radius: 4px;
+                padding: 8px;
+                min-height: 25px;
+            }
+            QPushButton:hover {
+                background-color: #5a5a5a;
+            }
+            QPushButton:pressed {
+                background-color: #3a3a3a;
+            }
+            QPushButton:disabled {
+                background-color: #2a2a2a;
+                color: #888;
+            }
+            QComboBox, QSlider {
+                background-color: #3a3a3a;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 4px;
+            }
+            QLabel {
+                color: #ddd;
+            }
+        """)
         layout = QVBoxLayout(panel)
+        layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10)
         
         # Input source
         input_group = QGroupBox("Input Source")
