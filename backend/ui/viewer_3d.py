@@ -5,7 +5,8 @@ Interactive 3D viewer for Gaussian Splatting scene using OpenGL.
 """
 
 import numpy as np
-from PySide6.QtWidgets import QWidget, QOpenGLWidget
+from PySide6.QtWidgets import QWidget
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QOpenGLContext, QSurfaceFormat
 from typing import Optional
