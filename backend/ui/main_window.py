@@ -146,24 +146,27 @@ class ProcessingThread(QThread):
             consecutive_none_frames = 0
             max_none_frames = 10  # Allow up to 10 consecutive None frames before checking
             
-            # Adjust parameters based on performance mode
+            # Adjust parameters based on performance mode and input source
+            # Video files can be processed faster since they're not real-time
+            is_video = self.input_source == "video"
+            
             if performance_mode == "Fast":
-                depth_skip_frames = 15
-                frame_skip = 8
+                depth_skip_frames = 20 if is_video else 15  # More skipping for video
+                frame_skip = 15 if is_video else 8  # Process every 16th frame for video
                 max_gaussians = 3000
                 target_size = 256
                 target_pixels = 15000
                 voxel_size = 0.15
             elif performance_mode == "Quality":
-                depth_skip_frames = 5
-                frame_skip = 2
+                depth_skip_frames = 10 if is_video else 5
+                frame_skip = 5 if is_video else 2
                 max_gaussians = 10000
                 target_size = 384
                 target_pixels = 30000
                 voxel_size = 0.08
             else:  # Balanced
-                depth_skip_frames = 10
-                frame_skip = 5
+                depth_skip_frames = 15 if is_video else 10
+                frame_skip = 10 if is_video else 5  # Process every 11th frame for video
                 max_gaussians = 5000
                 target_size = 320
                 target_pixels = 20000
@@ -197,7 +200,9 @@ class ProcessingThread(QThread):
                     if last_rendered is not None:
                         self.frame_ready.emit(last_rendered)
                     frame_count += 1
-                    self.msleep(33)  # ~30 FPS display rate
+                    # For video, skip faster (no sleep needed)
+                    if not is_video:
+                        self.msleep(33)  # ~30 FPS display rate for webcam
                     continue
                 
                 print(f"Processing frame {frame_count}: shape={frame.shape if hasattr(frame, 'shape') else 'unknown'}")
@@ -259,50 +264,77 @@ class ProcessingThread(QThread):
                     depth = last_depth
                 
                 # Convert to point cloud (with aggressive downsampling)
-                print(f"Converting to point cloud...")
-                try:
-                    # Always downsample depth map first for speed
-                    h, w = depth.shape[:2]
-                    # Use adaptive target pixels based on performance mode
-                    if h * w > target_pixels:
-                        scale = np.sqrt(target_pixels / (h * w))
-                        small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
-                        small_depth = cv2.resize(depth, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-                        small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-                        # Update intrinsics for smaller size
-                        scale_factor = small_w / w
-                        from backend.utils.camera import CameraIntrinsics
-                        small_intrinsics = CameraIntrinsics(
-                            fx=self.intrinsics.fx * scale_factor,
-                            fy=self.intrinsics.fy * scale_factor,
-                            cx=self.intrinsics.cx * scale_factor,
-                            cy=self.intrinsics.cy * scale_factor,
-                            width=small_w,
-                            height=small_h,
-                        )
-                        # Use GPU-accelerated version if available
-                        points, colors = depth_to_point_cloud(
-                            small_depth, small_frame, small_intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
-                        )
+                # Skip point cloud conversion if depth hasn't changed (for video)
+                if is_video and last_depth is not None and frame_count % depth_skip_frames != 0:
+                    # Reuse previous point cloud if depth hasn't changed
+                    print(f"Skipping point cloud conversion (reusing depth)...")
+                    # Use cached points from last frame if available
+                    if hasattr(self, '_last_points') and hasattr(self, '_last_colors'):
+                        points = self._last_points
+                        colors = self._last_colors
                     else:
-                        # Use GPU-accelerated version if available
-                        points, colors = depth_to_point_cloud(
-                            depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
-                        )
-                    print(f"Point cloud: {len(points)} points")
-                    
-                    # Aggressive downsampling for speed (GPU-accelerated)
-                    if len(points) > 3000:  # Even lower threshold
-                        from backend.utils.point_cloud import downsample_point_cloud
-                        # Use adaptive voxel size based on performance mode
-                        points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size, use_gpu=True)
-                        print(f"Downsampled to {len(points)} points")
-                except Exception as e:
-                    print(f"Point cloud conversion error: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    self.msleep(100)
-                    continue
+                        # Skip this frame entirely if no cached data
+                        frame_count += 1
+                        self.msleep(50)
+                        continue
+                else:
+                    print(f"Converting to point cloud...")
+                    try:
+                        # Always downsample depth map first for speed
+                        h, w = depth.shape[:2]
+                        # Use adaptive target pixels based on performance mode
+                        if h * w > target_pixels:
+                            scale = np.sqrt(target_pixels / (h * w))
+                            small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
+                            small_depth = cv2.resize(depth, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+                            small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+                            # Update intrinsics for smaller size
+                            scale_factor = small_w / w
+                            from backend.utils.camera import CameraIntrinsics
+                            small_intrinsics = CameraIntrinsics(
+                                fx=self.intrinsics.fx * scale_factor,
+                                fy=self.intrinsics.fy * scale_factor,
+                                cx=self.intrinsics.cx * scale_factor,
+                                cy=self.intrinsics.cy * scale_factor,
+                                width=small_w,
+                                height=small_h,
+                            )
+                            # Use GPU-accelerated version if available
+                            points, colors = depth_to_point_cloud(
+                                small_depth, small_frame, small_intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
+                            )
+                        else:
+                            # Use GPU-accelerated version if available
+                            points, colors = depth_to_point_cloud(
+                                depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
+                            )
+                        print(f"Point cloud: {len(points)} points")
+                        
+                        # Cache points for video reuse
+                        if is_video:
+                            self._last_points = points
+                            self._last_colors = colors
+                        
+                        # Aggressive downsampling for speed (GPU-accelerated)
+                        if len(points) > 3000:  # Even lower threshold
+                            from backend.utils.point_cloud import downsample_point_cloud
+                            # Use adaptive voxel size based on performance mode
+                            points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size, use_gpu=True)
+                            print(f"Downsampled to {len(points)} points")
+                            
+                            # Update cache
+                            if is_video:
+                                self._last_points = points
+                                self._last_colors = colors
+                    except Exception as e:
+                        print(f"Point cloud conversion error: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        # Skip this frame and continue
+                        frame_count += 1
+                        if not is_video:
+                            self.msleep(100)
+                        continue
                 
                 if len(points) > 0:
                     try:
@@ -377,7 +409,11 @@ class ProcessingThread(QThread):
                     print(f"Adapted settings: FPS={adaptive_manager.get_current_fps():.1f}, max_gaussians={max_gaussians}")
                 
                 # Small delay to prevent CPU spinning
-                self.msleep(200)  # Increased delay for better performance balance
+                # Less delay for video (no real-time requirement)
+                if is_video:
+                    self.msleep(50)  # Minimal delay for video processing
+                else:
+                    self.msleep(200)  # Delay for webcam to balance performance
         
         except KeyboardInterrupt:
             print("Processing interrupted by user")
