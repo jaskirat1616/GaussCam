@@ -36,26 +36,146 @@ class ProcessingThread(QThread):
     """Background thread for processing frames."""
     
     frame_ready = Signal(np.ndarray)
+    error_occurred = Signal(str)
     
-    def __init__(self, parent=None):
-        """Initialize processing thread."""
+    def __init__(
+        self,
+        input_source: str,
+        video_path: Optional[str] = None,
+        renderer=None,
+        parent=None,
+    ):
+        """
+        Initialize processing thread.
+        
+        Args:
+            input_source: 'webcam' or 'video'
+            video_path: Path to video file (if input_source is 'video')
+            renderer: Renderer instance
+            parent: Parent widget
+        """
         super().__init__(parent)
+        self.input_source = input_source
+        self.video_path = video_path
+        self.renderer = renderer
         self.is_running = False
         self.stop_flag = False
+        
+        # Components (will be initialized in run)
+        self.capture = None
+        self.async_capture = None
+        self.depth_estimator = None
+        self.intrinsics = None
+        self.gaussian_fitter = None
+        self.gaussian_merger = None
     
     def run(self) -> None:
         """Run processing loop."""
-        self.is_running = True
-        while not self.stop_flag:
+        try:
+            self.is_running = True
+            
+            # Initialize components
+            from backend.input.capture import (
+                WebcamCapture,
+                VideoCapture,
+                AsyncFrameCapture,
+                FramePreprocessor,
+            )
+            from backend.depth.midas_wrapper import MiDaSDepthEstimator
+            from backend.utils.camera import CameraIntrinsics
+            from backend.utils.point_cloud import depth_to_point_cloud
+            from backend.gaussian.fitter import GaussianFitter
+            from backend.gaussian.merger import GaussianMerger
+            
+            # Setup capture
+            width, height = 640, 480
+            if self.input_source == "webcam":
+                self.capture = WebcamCapture(device_id=0, width=width, height=height, fps=30)
+            elif self.input_source == "video" and self.video_path:
+                self.capture = VideoCapture(self.video_path, width=width, height=height)
+                width = self.capture.width
+                height = self.capture.height
+            else:
+                self.error_occurred.emit("Invalid input source")
+                return
+            
+            # Frame preprocessor
+            preprocessor = FramePreprocessor(normalize=True, to_rgb=True)
+            self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=2)
+            self.async_capture.start()
+            
+            # Depth estimator
+            self.depth_estimator = MiDaSDepthEstimator(model_name="Intel/dpt-large")
+            
+            # Camera intrinsics
+            self.intrinsics = CameraIntrinsics.default(width, height, fov=60.0)
+            
+            # Gaussian fitter and merger
+            self.gaussian_fitter = GaussianFitter(k_neighbors=8, initial_opacity=0.9)
+            self.gaussian_merger = GaussianMerger(merge_threshold=0.01, max_gaussians=500000)
+            
             # Processing loop
-            # TODO: Implement actual processing
-            pass
-        self.is_running = False
+            frame_count = 0
+            while not self.stop_flag:
+                # Read frame
+                frame = self.async_capture.read(timeout=0.1)
+                if frame is None:
+                    if self.input_source == "video":
+                        # End of video
+                        break
+                    continue
+                
+                # Convert to numpy if needed
+                import torch
+                if isinstance(frame, torch.Tensor):
+                    frame = frame.cpu().numpy()
+                
+                # Estimate depth
+                depth = self.depth_estimator.estimate_depth(frame, postprocess=True)
+                
+                # Convert to point cloud
+                points, colors = depth_to_point_cloud(
+                    depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
+                )
+                
+                if len(points) > 0:
+                    # Fit Gaussians
+                    gaussians = self.gaussian_fitter.fit_downsampled(
+                        points, colors, max_gaussians=50000, method="pca"
+                    )
+                    
+                    # Merge with accumulated
+                    merged_gaussians = self.gaussian_merger.merge(
+                        gaussians, merge_strategy="weighted"
+                    )
+                    
+                    # Render
+                    if self.renderer is not None:
+                        rendered = self.renderer.render(merged_gaussians)
+                        # Emit frame for display
+                        self.frame_ready.emit(rendered)
+                
+                frame_count += 1
+                
+                # Small delay to prevent CPU spinning
+                self.msleep(33)  # ~30 FPS
+        
+        except Exception as e:
+            import traceback
+            error_msg = f"Processing error: {str(e)}\n{traceback.format_exc()}"
+            self.error_occurred.emit(error_msg)
+        finally:
+            # Cleanup
+            if self.async_capture is not None:
+                self.async_capture.stop()
+            if self.capture is not None:
+                self.capture.release()
+            self.is_running = False
     
     def stop(self) -> None:
         """Stop processing thread."""
         self.stop_flag = True
-        self.wait()
+        self.wait(3000)  # Wait up to 3 seconds
 
 
 class MainWindow(QMainWindow):
@@ -70,6 +190,7 @@ class MainWindow(QMainWindow):
         # Initialize components
         self.renderer: Optional[Renderer] = None
         self.processing_thread: Optional[ProcessingThread] = None
+        self.video_path: Optional[str] = None
         
         # GPU detection (defer to avoid Metal conflicts during PySide6 init)
         self.gpu_detector = None
@@ -323,8 +444,10 @@ class MainWindow(QMainWindow):
             "Video Files (*.mp4 *.avi *.mov *.mkv)",
         )
         if file_path:
-            # TODO: Load video file
-            pass
+            self.video_path = file_path
+            # Update input combo to video
+            self.input_combo.setCurrentText("Video File")
+            print(f"Video file selected: {file_path}")
     
     def _on_start_clicked(self) -> None:
         """Handle start button click."""
@@ -340,17 +463,85 @@ class MainWindow(QMainWindow):
             )
             return
         
+        # Get input source
+        input_source = self.input_combo.currentText().lower()
+        if input_source == "video file":
+            input_source = "video"
+            if not self.video_path:
+                QMessageBox.warning(
+                    self,
+                    "No Video File",
+                    "Please select a video file first.",
+                )
+                return
+        elif input_source == "webcam":
+            input_source = "webcam"
+        else:
+            QMessageBox.warning(
+                self,
+                "Invalid Input",
+                "Please select an input source (Webcam or Video File).",
+            )
+            return
+        
+        # Stop existing thread if running
+        if self.processing_thread is not None and self.processing_thread.isRunning():
+            self.processing_thread.stop()
+        
+        # Create and start processing thread
+        self.processing_thread = ProcessingThread(
+            input_source=input_source,
+            video_path=self.video_path if input_source == "video" else None,
+            renderer=self.renderer,
+            parent=self,
+        )
+        self.processing_thread.frame_ready.connect(self._on_frame_ready)
+        self.processing_thread.error_occurred.connect(self._on_processing_error)
+        self.processing_thread.finished.connect(self._on_processing_finished)
+        
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        # TODO: Start processing
-        pass
+        self.processing_thread.start()
+        
+        print(f"Started processing: {input_source}")
     
     def _on_stop_clicked(self) -> None:
         """Handle stop button click."""
+        if self.processing_thread is not None and self.processing_thread.isRunning():
+            self.processing_thread.stop()
+        
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
-        # TODO: Stop processing
-        pass
+        print("Stopped processing")
+    
+    def _on_frame_ready(self, frame: np.ndarray) -> None:
+        """Handle frame ready signal from processing thread."""
+        if self.render_widget is not None:
+            self.render_widget.set_frame(frame)
+        
+        # Update Gaussian count
+        if hasattr(self, 'gaussian_count_label') and self.processing_thread is not None:
+            if hasattr(self.processing_thread, 'gaussian_merger') and \
+               self.processing_thread.gaussian_merger is not None:
+                gaussians = self.processing_thread.gaussian_merger.accumulated_gaussians
+                if gaussians is not None:
+                    self.gaussian_count_label.setText(f"Gaussians: {gaussians.num_gaussians}")
+    
+    def _on_processing_error(self, error_msg: str) -> None:
+        """Handle processing error."""
+        print(f"Processing error: {error_msg}")
+        QMessageBox.critical(
+            self,
+            "Processing Error",
+            f"An error occurred during processing:\n{error_msg}",
+        )
+        self._on_stop_clicked()
+    
+    def _on_processing_finished(self) -> None:
+        """Handle processing finished."""
+        print("Processing finished")
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
     
     def _reset_view(self) -> None:
         """Reset novel view."""
