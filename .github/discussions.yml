@@ -1,0 +1,16 @@
+# GitHub Discussions Configuration
+
+categories:
+  - emoji: 💬
+    name: General
+    description: General discussion about GaussCam
+  - emoji: 💡
+    name: Ideas
+    description: Ideas and feature suggestions
+  - emoji: 🐛
+    name: Q&A
+    description: Questions and answers about using GaussCam
+  - emoji: 🎉
+    name: Show and Tell
+    description: Share your projects and results
+
