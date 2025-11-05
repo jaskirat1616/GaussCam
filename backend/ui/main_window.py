@@ -328,6 +328,18 @@ class ProcessingThread(QThread):
                             self._last_points = points
                             self._last_colors = colors
                         
+                        # Filter point cloud for accuracy (remove outliers)
+                        if len(points) > 100:
+                            from backend.utils.point_cloud import filter_point_cloud
+                            points, colors = filter_point_cloud(
+                                points, colors,
+                                min_depth=0.1,
+                                max_depth=10.0,
+                                remove_outliers=True,
+                                use_gpu=True
+                            )
+                            print(f"Filtered to {len(points)} points")
+                        
                         # Aggressive downsampling for speed (GPU-accelerated)
                         if len(points) > 3000:  # Even lower threshold
                             from backend.utils.point_cloud import downsample_point_cloud

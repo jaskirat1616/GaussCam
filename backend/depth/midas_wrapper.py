@@ -171,11 +171,11 @@ class MiDaSDepthEstimator:
     
     def postprocess(self, depth: np.ndarray, method: str = "normalize") -> np.ndarray:
         """
-        Post-process depth map.
+        Post-process depth map with accuracy improvements.
         
         Args:
             depth: Raw depth map
-            method: Post-processing method ('normalize', 'invert', 'smooth')
+            method: Post-processing method ('normalize', 'invert', 'smooth', 'enhanced')
         
         Returns:
             Processed depth map
@@ -189,10 +189,28 @@ class MiDaSDepthEstimator:
             return 1.0 - depth
         
         elif method == "smooth":
-            # Apply bilateral filtering for smoothness
+            # Apply bilateral filtering for smoothness while preserving edges
             depth_uint8 = (depth * 255).astype(np.uint8)
-            smoothed = cv2.bilateralFilter(depth_uint8, 5, 75, 75)
+            # Use larger kernel for better smoothness
+            smoothed = cv2.bilateralFilter(depth_uint8, d=9, sigmaColor=75, sigmaSpace=75)
             return smoothed.astype(np.float32) / 255.0
+        
+        elif method == "enhanced":
+            # Enhanced post-processing for better accuracy
+            # 1. Bilateral filtering for edge-preserving smoothing
+            depth_uint8 = (depth * 255).astype(np.uint8)
+            smoothed = cv2.bilateralFilter(depth_uint8, d=9, sigmaColor=75, sigmaSpace=75)
+            
+            # 2. Remove noise with median filter
+            denoised = cv2.medianBlur(smoothed, ksize=5)
+            
+            # 3. Normalize back to [0, 1]
+            result = denoised.astype(np.float32) / 255.0
+            
+            # 4. Ensure valid range
+            result = np.clip(result, 0.0, 1.0)
+            
+            return result
         
         return depth
     
@@ -200,13 +218,15 @@ class MiDaSDepthEstimator:
         self,
         image: np.ndarray,
         postprocess: bool = True,
+        postprocess_method: str = "enhanced",
     ) -> np.ndarray:
         """
-        Estimate depth map from RGB image.
+        Estimate depth map from RGB image with accuracy improvements.
         
         Args:
             image: RGB image as numpy array (H, W, 3)
             postprocess: Apply post-processing
+            postprocess_method: Post-processing method ('smooth', 'enhanced')
         
         Returns:
             Depth map (H, W) normalized to [0, 1]
@@ -214,7 +234,7 @@ class MiDaSDepthEstimator:
         depth = self.predict(image)
         
         if postprocess:
-            depth = self.postprocess(depth, method="smooth")
+            depth = self.postprocess(depth, method=postprocess_method)
         
         return depth
     
