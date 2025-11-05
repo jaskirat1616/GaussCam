@@ -1,12 +1,12 @@
 # GaussCam
 
-A production-ready real-time monocular Gaussian Splatting renderer supporting both CUDA (NVIDIA GPUs) and MPS (Apple Silicon). Features live webcam input, offline video processing, depth estimation, and novel view rendering.
+A Gaussian Splatting renderer supporting both CUDA (NVIDIA GPUs) and MPS (Apple Silicon). Features webcam input, offline video processing, depth estimation, and novel view rendering.
 
 ## Features
 
-- **Real-time Gaussian Splatting**: GPU-accelerated rendering with CUDA (NVIDIA) and MPS (Apple Silicon)
-- **Monocular Input**: Live webcam feed and offline video file support
-- **Depth Estimation**: MiDaS-large model for accurate monocular depth estimation
+- **Gaussian Splatting**: GPU-accelerated rendering with CUDA (NVIDIA) and MPS (Apple Silicon)
+- **Input Sources**: Webcam feed and offline video file support
+- **Depth Estimation**: MiDaS-large model for depth estimation
 - **Camera Tracking**: RAFT optical flow for frame-to-frame pose estimation
 - **Novel View Rendering**: Interactive camera control for arbitrary viewpoints
 - **Cross-Platform**: Windows (CUDA) and macOS (MPS) support
@@ -135,7 +135,7 @@ GaussCam/
 
 ## Performance
 
-- **Real-time**: 15-60 FPS on mid-range GPUs
+- **Frame Rate**: 15-60 FPS on mid-range GPUs
 - **Webcam latency**: <100ms end-to-end
 - **Offline video**: 30+ FPS processing
 - **GPU memory**: Efficient pooling for 1M+ Gaussians
@@ -184,6 +184,6 @@ MIT License
 
 - [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) - Original paper and implementation
 - [gsplat](https://github.com/nerfstudio-project/gsplat) - CUDA-accelerated Gaussian Splatting library
-- [MiDaS](https://github.com/isl-org/MiDaS) - Monocular depth estimation
+- [MiDaS](https://github.com/isl-org/MiDaS) - Depth estimation
 - [RAFT](https://github.com/princeton-vl/RAFT) - Optical flow estimation
 
