@@ -105,10 +105,12 @@ class ProcessingThread(QThread):
             from backend.gaussian.fitter import GaussianFitter
             from backend.gaussian.merger import GaussianMerger
             
-            # Setup capture
-            width, height = 640, 480
-            if self.input_source == "webcam":
-                self.capture = WebcamCapture(device_id=self.webcam_device_id, width=width, height=height, fps=30)
+                # Setup capture
+                width, height = 640, 480
+                if self.input_source == "webcam":
+                    logger.info(f"Opening webcam device {self.webcam_device_id}...")
+                    self.capture = WebcamCapture(device_id=self.webcam_device_id, width=width, height=height, fps=30)
+                    logger.info(f"Webcam opened: {width}x{height}")
             elif self.input_source == "video" and self.video_path:
                 self.capture = VideoCapture(self.video_path, width=width, height=height)
                 width = self.capture.width
@@ -117,10 +119,11 @@ class ProcessingThread(QThread):
                 self.error_occurred.emit("Invalid input source")
                 return
             
-            # Frame preprocessor
-            preprocessor = FramePreprocessor(normalize=True, to_rgb=True)
-            self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=2)
-            self.async_capture.start()
+                # Frame preprocessor
+                preprocessor = FramePreprocessor(normalize=True, to_rgb=True)
+                self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=2)
+                self.async_capture.start()
+                logger.info(f"Async capture started for {self.input_source}")
             
             # Depth estimator (use smaller model for speed)
             print("Loading MiDaS depth model...")
@@ -140,7 +143,7 @@ class ProcessingThread(QThread):
             self.gaussian_fitter = GaussianFitter(k_neighbors=8, initial_opacity=0.9)
             self.gaussian_merger = GaussianMerger(merge_threshold=0.01, max_gaussians=500000)
             
-            print(f"Processing started: {self.input_source}")
+            logger.info(f"Processing started: {self.input_source}")
             
             # Processing loop with optimizations
             frame_count = 0
@@ -194,7 +197,7 @@ class ProcessingThread(QThread):
                 if frame is None:
                     if self.input_source == "video":
                         # End of video
-                        print("Video ended")
+                        logger.info("Video ended")
                         break
                     # For webcam, keep trying - don't exit immediately
                     consecutive_none_frames += 1
@@ -218,7 +221,10 @@ class ProcessingThread(QThread):
                         self.msleep(33)  # ~30 FPS display rate for webcam
                     continue
                 
-                print(f"Processing frame {frame_count}: shape={frame.shape if hasattr(frame, 'shape') else 'unknown'}")
+                logger.debug(
+                    f"Processing frame {frame_count}: "
+                    f"shape={frame.shape if hasattr(frame, 'shape') else 'unknown'}"
+                )
                 
                 # Convert to numpy if needed
                 import torch
@@ -255,18 +261,25 @@ class ProcessingThread(QThread):
                             scale = min(target_size / h, target_size / w)
                             small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
                             small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-                            depth = self.depth_estimator.estimate_depth(small_frame, postprocess=True)
+                            # Use enhanced post-processing for better accuracy
+                            depth = self.depth_estimator.estimate_depth(
+                                small_frame, postprocess=True, postprocess_method="enhanced"
+                            )
                             # Resize depth back to original size (use linear for speed)
                             depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_LINEAR)
                         else:
-                            depth = self.depth_estimator.estimate_depth(frame, postprocess=True)
+                            # Use enhanced post-processing for better accuracy
+                            depth = self.depth_estimator.estimate_depth(
+                                frame, postprocess=True, postprocess_method="enhanced"
+                            )
                         last_depth = depth
                         depth_time = time.time() - depth_start_time
-                        print(f"Depth estimated: shape={depth.shape}, min={depth.min():.3f}, max={depth.max():.3f}, time={depth_time:.3f}s")
+                        logger.debug(
+                            f"Depth estimated: shape={depth.shape}, "
+                            f"min={depth.min():.3f}, max={depth.max():.3f}, time={depth_time:.3f}s"
+                        )
                     except Exception as e:
-                        print(f"Depth estimation error: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.error(f"Depth estimation error: {e}", exc_info=True)
                         if last_depth is not None:
                             depth = last_depth
                         else:
@@ -321,7 +334,7 @@ class ProcessingThread(QThread):
                             points, colors = depth_to_point_cloud(
                                 depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0, use_gpu=True
                             )
-                        print(f"Point cloud: {len(points)} points")
+                        logger.debug(f"Point cloud: {len(points)} points")
                         
                         # Cache points for video reuse
                         if is_video:
@@ -338,23 +351,21 @@ class ProcessingThread(QThread):
                                 remove_outliers=True,
                                 use_gpu=True
                             )
-                            print(f"Filtered to {len(points)} points")
+                            logger.debug(f"Filtered to {len(points)} points")
                         
                         # Aggressive downsampling for speed (GPU-accelerated)
                         if len(points) > 3000:  # Even lower threshold
                             from backend.utils.point_cloud import downsample_point_cloud
                             # Use adaptive voxel size based on performance mode
                             points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size, use_gpu=True)
-                            print(f"Downsampled to {len(points)} points")
+                            logger.debug(f"Downsampled to {len(points)} points")
                             
                             # Update cache
                             if is_video:
                                 self._last_points = points
                                 self._last_colors = colors
                     except Exception as e:
-                        print(f"Point cloud conversion error: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.error(f"Point cloud conversion error: {e}", exc_info=True)
                         # Skip this frame and continue
                         frame_count += 1
                         if not is_video:
@@ -364,42 +375,40 @@ class ProcessingThread(QThread):
                 if len(points) > 0:
                     try:
                         # Fit Gaussians (use uniform method for speed)
-                        print(f"Fitting Gaussians from {len(points)} points...")
+                        logger.debug(f"Fitting Gaussians from {len(points)} points...")
                         # Use performance mode setting with GPU acceleration
                         gaussians = self.gaussian_fitter.fit_downsampled(
                             points, colors, max_gaussians=max_gaussians, method="uniform", use_gpu=True
                         )
-                        print(f"Fitted {gaussians.num_gaussians} Gaussians")
+                        logger.debug(f"Fitted {gaussians.num_gaussians} Gaussians")
                         
                         # Merge with accumulated
-                        print(f"Merging Gaussians...")
+                        logger.debug(f"Merging Gaussians...")
                         merged_gaussians = self.gaussian_merger.merge(
                             gaussians, merge_strategy="weighted"
                         )
-                        print(f"Merged to {merged_gaussians.num_gaussians} Gaussians")
+                        logger.debug(f"Merged to {merged_gaussians.num_gaussians} Gaussians")
                         
                         # Render
                         if self.renderer is not None and merged_gaussians.num_gaussians > 0:
                             try:
-                                print(f"Rendering {merged_gaussians.num_gaussians} Gaussians...")
+                                logger.debug(f"Rendering {merged_gaussians.num_gaussians} Gaussians...")
                                 rendered = self.renderer.render(merged_gaussians)
-                                print(f"Rendered frame: shape={rendered.shape}, min={rendered.min():.3f}, max={rendered.max():.3f}")
+                                logger.debug(
+                                    f"Rendered frame: shape={rendered.shape}, "
+                                    f"min={rendered.min():.3f}, max={rendered.max():.3f}"
+                                )
                                 # Cache rendered frame
                                 last_rendered = rendered.copy()
                                 # Emit frame for display
                                 self.frame_ready.emit(rendered)
-                                print(f"Frame emitted to UI")
                             except Exception as e:
-                                print(f"Rendering error: {e}")
-                                import traceback
-                                traceback.print_exc()
+                                logger.error(f"Rendering error: {e}", exc_info=True)
                                 # Don't exit on rendering error - continue processing
                                 if last_rendered is not None:
                                     self.frame_ready.emit(last_rendered)
                     except Exception as e:
-                        print(f"Gaussian fitting/merging error: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.error(f"Gaussian fitting/merging error: {e}", exc_info=True)
                         # Don't exit on fitting error - continue processing
                         if last_rendered is not None:
                             self.frame_ready.emit(last_rendered)
@@ -450,19 +459,19 @@ class ProcessingThread(QThread):
             self.error_occurred.emit(error_msg)
         finally:
             # Cleanup
-            print("Cleaning up processing thread...")
+            logger.info("Cleaning up processing thread...")
             if self.async_capture is not None:
                 try:
                     self.async_capture.stop()
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Error stopping async capture: {e}")
             if self.capture is not None:
                 try:
                     self.capture.release()
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Error releasing capture: {e}")
             self.is_running = False
-            print("Processing thread finished")
+            logger.info("Processing thread finished")
     
     def stop(self) -> None:
         """Stop processing thread."""
@@ -1046,9 +1055,18 @@ class MainWindow(QMainWindow):
     
     def _on_processing_finished(self) -> None:
         """Handle processing finished."""
-        print("Processing finished")
+        logger.info("Processing finished")
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        self.progress_bar.setVisible(False)
+        
+        # Get final stats if available
+        if self.progress_tracker is not None:
+            stats = self.progress_tracker.get_stats()
+            logger.info(f"Processing stats: {stats}")
+            self._update_status(
+                f"Complete: {stats['processed']} frames processed at {stats['fps']:.1f} FPS"
+            )
         
         # Show completion message
         if self.processing_thread is not None:
