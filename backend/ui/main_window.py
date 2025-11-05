@@ -464,18 +464,43 @@ class MainWindow(QMainWindow):
     def __init__(self):
         """Initialize main window."""
         super().__init__()
-        self.setWindowTitle("GaussCam - Gaussian Splatting")
-        self.setGeometry(100, 100, 1280, 720)
+        logger.info("Initializing MainWindow...")
+        
+        # Load configuration
+        try:
+            self.config = get_config()
+            logger.info("Loaded application configuration")
+        except Exception as e:
+            logger.warning(f"Failed to load config, using defaults: {e}")
+            from backend.utils.config import AppConfig
+            self.config = AppConfig()
+        
+        self.setWindowTitle("GaussCam - Gaussian Splatting Renderer")
+        self.setMinimumSize(
+            self.config.window_width,
+            self.config.window_height
+        )
         
         # Initialize components
         self.renderer: Optional[Renderer] = None
         self.processing_thread: Optional[ProcessingThread] = None
         self.video_path: Optional[str] = None
         self.selected_webcam_id: int = 0
+        self.performance_mode: str = "Balanced"
         
         # GPU detection (defer to avoid Metal conflicts during PySide6 init)
         self.gpu_detector = None
         self.backend = "unknown"
+        
+        # Initialize progress tracker
+        self.progress_tracker: Optional[FrameProgressTracker] = None
+        
+        # Setup status bar
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.statusBar.addPermanentWidget(self.progress_bar)
         
         # Setup UI first
         self._setup_ui()
@@ -483,6 +508,9 @@ class MainWindow(QMainWindow):
         
         # Initialize GPU detection after UI is ready
         self._init_gpu_detection()
+        
+        self._update_status("Ready")
+        logger.info("MainWindow initialized successfully")
     
     def _setup_ui(self) -> None:
         """Setup user interface."""
@@ -797,17 +825,38 @@ class MainWindow(QMainWindow):
     
     def _select_video_file(self) -> None:
         """Select video file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Video File",
-            "",
-            "Video Files (*.mp4 *.avi *.mov *.mkv)",
-        )
-        if file_path:
-            self.video_path = file_path
-            # Update input combo to video
-            self.input_combo.setCurrentText("Video File")
-            print(f"Video file selected: {file_path}")
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Video File",
+                "",
+                "Video Files (*.mp4 *.avi *.mov *.mkv *.webm *.m4v);;All Files (*)",
+            )
+            
+            if file_path:
+                # Validate video file
+                try:
+                    validate_video_file(file_path)
+                    self.video_path = file_path
+                    # Update input combo to video
+                    self.input_combo.setCurrentText("Video File")
+                    logger.info(f"Video file selected: {file_path}")
+                    from pathlib import Path
+                    self._update_status(f"Video file: {Path(file_path).name}")
+                except ValidationError as e:
+                    logger.error(f"Invalid video file: {e}")
+                    QMessageBox.critical(
+                        self,
+                        "Invalid Video File",
+                        f"Invalid video file:\n{str(e)}",
+                    )
+        except Exception as e:
+            logger.error(f"Error selecting video file: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "File Selection Error",
+                f"Failed to select video file:\n{str(e)}",
+            )
     
     def _on_start_clicked(self) -> None:
         """Handle start button click."""
@@ -973,12 +1022,14 @@ class MainWindow(QMainWindow):
     
     def _on_processing_error(self, error_msg: str) -> None:
         """Handle processing error."""
-        print(f"Processing error: {error_msg}")
+        logger.error(f"Processing error: {error_msg}")
         QMessageBox.critical(
             self,
             "Processing Error",
             f"An error occurred during processing:\n{error_msg}",
         )
+        self._update_status("Error occurred")
+        self.progress_bar.setVisible(False)
         self._on_stop_clicked()
     
     def _on_processing_finished(self) -> None:
