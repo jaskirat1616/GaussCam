@@ -1097,6 +1097,7 @@ class MainWindow(QMainWindow):
                 video_path=self.video_path if input_source == "video" else None,
                 renderer=self.renderer,
                 webcam_device_id=self.selected_webcam_id,
+                depth_model=self.depth_model,
                 parent=self,
             )
             self.processing_thread.frame_ready.connect(self._on_frame_ready)
