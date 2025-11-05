@@ -717,8 +717,14 @@ class MainWindow(QMainWindow):
         
         self.video_button = QPushButton("Select Video File")
         self.video_button.clicked.connect(self._select_video_file)
+        # Button starts disabled - will be enabled when "Video File" is selected via _on_input_changed
         self.video_button.setEnabled(False)
+        # Make button more visible when enabled
+        self.video_button.setMinimumHeight(30)
         input_layout.addWidget(self.video_button)
+        
+        # Initialize button state based on default selection (Webcam)
+        # _on_input_changed will be called automatically when combo changes
         
         input_group.setLayout(input_layout)
         layout.addWidget(input_group)
