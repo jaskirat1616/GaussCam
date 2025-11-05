@@ -4,9 +4,10 @@ Export Utilities
 Export Gaussians to various 3D formats (USDZ, OBJ, PLY, GLB, STL, etc.).
 """
 
+import json
 import numpy as np
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 import pickle
 
 try:
@@ -21,6 +22,8 @@ try:
 except ImportError:
     USD_AVAILABLE = False
 
+from backend.gaussian.four_d import Gaussian4D
+from backend.compress import compress_gaussians
 from backend.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -197,7 +200,7 @@ def export_glb(gaussians, file_path: str) -> bool:
         )
     
     try:
-        positions = gaussians.positions
+        positions = gaussians.centroids
         colors = gaussians.colors if hasattr(gaussians, 'colors') else None
         
         # Create point cloud
@@ -223,6 +226,65 @@ def export_glb(gaussians, file_path: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to export GLB: {e}", exc_info=True)
         raise
+
+
+def export_gltf_animation(gaussians: Gaussian4D, file_path: str) -> bool:
+    """Export dynamic Gaussians to a multi-frame glTF scene."""
+
+    if not TRIMESH_AVAILABLE:
+        raise ImportError("trimesh required for glTF export. Install with: pip install trimesh")
+
+    try:
+        base_vertices = gaussians.gaussian.centroids
+        motion = gaussians.motion.translation
+        colors = gaussians.gaussian.colors
+
+        scene = trimesh.Scene()
+        frame_vertices = [base_vertices, base_vertices + motion]
+
+        for idx, verts in enumerate(frame_vertices):
+            color_uint8 = (np.clip(colors, 0.0, 1.0) * 255).astype(np.uint8)
+            mesh = trimesh.PointCloud(vertices=verts, colors=color_uint8)
+            scene.add_geometry(mesh, node_name=f"frame_{idx}")
+
+        scene.export(file_path)
+        logger.info(f"Exported dynamic Gaussians to glTF: {file_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to export glTF animation: {e}", exc_info=True)
+        raise
+
+
+def export_compressed(gaussians, file_path: str, target_count: Optional[int] = None) -> bool:
+    """Export compressed Gaussians using quantization and codebooks."""
+
+    importance = np.ones(gaussians.num_gaussians, dtype=np.float32)
+    compressed = compress_gaussians(
+        gaussians,
+        importance_scores=importance,
+        target_count=target_count,
+    )
+
+    quantized = {
+        key: value.tolist() if hasattr(value, "tolist") else value
+        for key, value in compressed["quantized"].items()
+    }
+
+    payload = {
+        "quantized": quantized,
+        "codebook": {
+            "codebook": compressed["codebook"]["codebook"].tolist(),
+            "assignments": compressed["codebook"]["assignments"].tolist(),
+        },
+        "stats": compressed["stats"].__dict__,
+    }
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+    logger.info(f"Exported compressed Gaussians to {file_path}")
+    return True
 
 
 def export_stl(gaussians, file_path: str) -> bool:
@@ -293,6 +355,12 @@ def export_gaussians(gaussians, file_path: str, format: str = "auto") -> bool:
         return export_obj(gaussians, str(file_path))
     elif format == "glb":
         return export_glb(gaussians, str(file_path))
+    elif format == "gltf":
+        if not isinstance(gaussians, Gaussian4D):
+            raise TypeError("glTF export requires Gaussian4D input")
+        return export_gltf_animation(gaussians, str(file_path))
+    elif format == "gca":
+        return export_compressed(gaussians, str(file_path))
     elif format == "stl":
         return export_stl(gaussians, str(file_path))
     elif format in ["pkl", "pickle"]:
