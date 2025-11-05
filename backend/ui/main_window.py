@@ -584,8 +584,11 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Main layout
-        main_layout = QHBoxLayout(central_widget)
+        # Main layout (vertical for camera + 3D viewer)
+        main_layout = QVBoxLayout(central_widget)
+        
+        # Top row: Camera view and controls
+        top_row = QHBoxLayout()
         
         # Render widget (will be initialized after GPU detection)
         self.render_widget = None
@@ -593,11 +596,39 @@ class MainWindow(QMainWindow):
         self.render_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.render_placeholder.setMinimumSize(640, 480)
         self.render_placeholder.setStyleSheet("background-color: #1e1e1e; color: white; font-size: 14px;")
-        main_layout.addWidget(self.render_placeholder, stretch=3)
+        top_row.addWidget(self.render_placeholder, stretch=3)
         
         # Control panel
         control_panel = self._create_control_panel()
-        main_layout.addWidget(control_panel, stretch=1)
+        top_row.addWidget(control_panel, stretch=1)
+        
+        main_layout.addLayout(top_row, stretch=2)
+        
+        # Bottom row: 3D Viewer
+        viewer_group = QGroupBox("3D Scene Viewer")
+        viewer_layout = QVBoxLayout()
+        
+        try:
+            from backend.ui.viewer_3d import Viewer3DWidget
+            self.viewer_3d = Viewer3DWidget(self)
+            if self.viewer_3d.is_available:
+                viewer_layout.addWidget(self.viewer_3d)
+                self.viewer_3d.setMinimumHeight(300)
+                logger.info("3D viewer initialized")
+            else:
+                viewer_label = QLabel("3D viewer not available (OpenGL required)")
+                viewer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                viewer_layout.addWidget(viewer_label)
+                self.viewer_3d = None
+        except Exception as e:
+            logger.warning(f"Failed to initialize 3D viewer: {e}")
+            viewer_label = QLabel("3D viewer not available")
+            viewer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            viewer_layout.addWidget(viewer_label)
+            self.viewer_3d = None
+        
+        viewer_group.setLayout(viewer_layout)
+        main_layout.addWidget(viewer_group, stretch=1)
     
     def _create_control_panel(self) -> QWidget:
         """Create control panel."""
@@ -724,20 +755,40 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._select_video_file)
         file_menu.addAction(open_action)
         
-        # Export menu
-        export_menu = file_menu.addMenu("Export")
-        
-        export_gaussians_action = QAction("Save Gaussians...", self)
-        export_gaussians_action.triggered.connect(self._export_gaussians)
-        export_menu.addAction(export_gaussians_action)
-        
-        load_gaussians_action = QAction("Load Gaussians...", self)
-        load_gaussians_action.triggered.connect(self._load_gaussians)
-        export_menu.addAction(load_gaussians_action)
-        
-        export_video_action = QAction("Export Rendered Video...", self)
-        export_video_action.triggered.connect(self._export_video)
-        export_menu.addAction(export_video_action)
+            # Export menu
+            export_menu = file_menu.addMenu("Export")
+
+            export_gaussians_action = QAction("Export Gaussians...", self)
+            export_gaussians_action.triggered.connect(self._export_gaussians)
+            export_menu.addAction(export_gaussians_action)
+
+            load_gaussians_action = QAction("Load Gaussians...", self)
+            load_gaussians_action.triggered.connect(self._load_gaussians)
+            export_menu.addAction(load_gaussians_action)
+
+            export_menu.addSeparator()
+
+            export_usdz_action = QAction("Export as USDZ (AR/VR)...", self)
+            export_usdz_action.triggered.connect(lambda: self._export_gaussians_format("usdz"))
+            export_menu.addAction(export_usdz_action)
+
+            export_ply_action = QAction("Export as PLY...", self)
+            export_ply_action.triggered.connect(lambda: self._export_gaussians_format("ply"))
+            export_menu.addAction(export_ply_action)
+
+            export_obj_action = QAction("Export as OBJ...", self)
+            export_obj_action.triggered.connect(lambda: self._export_gaussians_format("obj"))
+            export_menu.addAction(export_obj_action)
+
+            export_glb_action = QAction("Export as GLB...", self)
+            export_glb_action.triggered.connect(lambda: self._export_gaussians_format("glb"))
+            export_menu.addAction(export_glb_action)
+
+            export_menu.addSeparator()
+
+            export_video_action = QAction("Export Rendered Video...", self)
+            export_video_action.triggered.connect(self._export_video)
+            export_menu.addAction(export_video_action)
         
         file_menu.addSeparator()
         
@@ -1083,8 +1134,8 @@ class MainWindow(QMainWindow):
         try:
             if self.render_widget is not None:
                 self.render_widget.set_frame(frame)
-            
-            # Update Gaussian count
+
+            # Update Gaussian count and 3D viewer
             if hasattr(self, 'gaussian_count_label') and self.processing_thread is not None:
                 if hasattr(self.processing_thread, 'gaussian_merger') and \
                    self.processing_thread.gaussian_merger is not None:
@@ -1092,7 +1143,11 @@ class MainWindow(QMainWindow):
                     if gaussians is not None:
                         count = gaussians.num_gaussians
                         self.gaussian_count_label.setText(f"Gaussians: {count}")
-                        
+
+                        # Update 3D viewer
+                        if self.viewer_3d is not None and self.viewer_3d.is_available:
+                            self.viewer_3d.set_gaussians(gaussians)
+
                         # Update progress if available
                         if self.progress_tracker is not None:
                             self.progress_tracker.update_frame(processed=True)
@@ -1100,6 +1155,12 @@ class MainWindow(QMainWindow):
                                 self.progress_tracker.current,
                                 self.progress_tracker.total
                             )
+                            
+                        # Update FPS
+                        if self.progress_tracker is not None:
+                            stats = self.progress_tracker.get_stats()
+                            if stats.fps > 0:
+                                self.fps_label.setText(f"FPS: {stats.fps:.1f}")
                     else:
                         self.gaussian_count_label.setText("Gaussians: 0")
         except Exception as e:
@@ -1151,7 +1212,11 @@ class MainWindow(QMainWindow):
                     )
     
     def _export_gaussians(self) -> None:
-        """Export Gaussians to file."""
+        """Export Gaussians to pickle file (default)."""
+        self._export_gaussians_format("pkl")
+    
+    def _export_gaussians_format(self, format: str = "pkl") -> None:
+        """Export Gaussians to specified format."""
         if self.processing_thread is None or not hasattr(self.processing_thread, 'gaussian_merger'):
             QMessageBox.warning(
                 self,
@@ -1169,31 +1234,54 @@ class MainWindow(QMainWindow):
             )
             return
         
+        # File filter based on format
+        format_map = {
+            "pkl": "Pickle Files (*.pkl);;All Files (*)",
+            "usdz": "USDZ Files (*.usdz);;All Files (*)",
+            "ply": "PLY Files (*.ply);;All Files (*)",
+            "obj": "OBJ Files (*.obj);;All Files (*)",
+            "glb": "GLB Files (*.glb);;All Files (*)",
+            "stl": "STL Files (*.stl);;All Files (*)",
+        }
+        
+        file_filter = format_map.get(format, "All Files (*)")
+        
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Gaussians",
+            f"Export Gaussians as {format.upper()}",
             "",
-            "Pickle Files (*.pkl);;All Files (*)",
+            file_filter,
         )
         
         if file_path:
             try:
-                import pickle
-                data = {
-                    "centroids": gaussians.centroids,
-                    "scales": gaussians.scales,
-                    "rotations": gaussians.rotations,
-                    "colors": gaussians.colors,
-                    "opacity": gaussians.opacity,
-                }
-                with open(file_path, "wb") as f:
-                    pickle.dump(data, f)
+                from backend.utils.export import export_gaussians
+                
+                # Ensure file has correct extension
+                from pathlib import Path
+                file_path_obj = Path(file_path)
+                if file_path_obj.suffix.lower() != f".{format}":
+                    file_path = str(file_path_obj.with_suffix(f".{format}"))
+                
+                export_gaussians(gaussians, file_path, format=format)
+                
                 QMessageBox.information(
                     self,
                     "Export Successful",
-                    f"Saved {gaussians.num_gaussians} Gaussians to:\n{file_path}",
+                    f"Exported {gaussians.num_gaussians} Gaussians to {format.upper()}:\n{file_path}",
+                )
+                logger.info(f"Exported {gaussians.num_gaussians} Gaussians to {format.upper()}: {file_path}")
+            except ImportError as e:
+                QMessageBox.warning(
+                    self,
+                    "Export Error",
+                    f"Export format '{format}' requires additional dependencies:\n{str(e)}\n\n"
+                    f"Please install required packages:\n"
+                    f"- For USDZ: pip install usd-core\n"
+                    f"- For PLY/GLB/STL: pip install trimesh",
                 )
             except Exception as e:
+                logger.error(f"Export error: {e}", exc_info=True)
                 QMessageBox.critical(
                     self,
                     "Export Error",

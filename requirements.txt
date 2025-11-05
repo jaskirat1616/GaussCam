@@ -34,6 +34,11 @@ pyyaml>=6.0  # Configuration management
 # Video processing
 moviepy>=1.0.3
 
+# 3D export formats
+trimesh>=3.20.0  # For PLY, GLB, STL export
+usd-core>=23.08; sys_platform == 'darwin'  # USDZ export (macOS)
+# Note: For Windows/Linux USD, install usd-core separately or use alternative
+
 # Development
 pytest>=7.4.0
 pytest-cov>=4.1.0
