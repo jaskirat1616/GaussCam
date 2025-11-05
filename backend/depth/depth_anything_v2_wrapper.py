@@ -205,15 +205,55 @@ class DepthAnythingV2Estimator:
         if self.pipeline is None:
             raise RuntimeError("Model not loaded. Call _load_transformers() first.")
         
-        # Convert to PIL Image
+        # Convert to PIL Image (already in RGB format from preprocess)
         pil_image = Image.fromarray(image)
         
         # Predict depth
-        result = self.pipeline(pil_image)
-        depth = result["depth"]
+        try:
+            result = self.pipeline(pil_image)
+            
+            # Handle different result formats
+            # Some pipelines return dict with 'depth', others return PIL Image directly
+            if isinstance(result, dict):
+                # Try common keys
+                depth = result.get("depth") or result.get("predicted_depth") or result.get("depth_map")
+                if depth is None:
+                    # Try to get the first value if it's a dict
+                    if result:
+                        depth = list(result.values())[0]
+                    else:
+                        raise ValueError("Pipeline returned empty dictionary")
+            elif hasattr(result, 'mode'):  # PIL Image
+                depth = result
+            else:
+                depth = result
+            
+            if depth is None:
+                raise ValueError("Pipeline returned None or empty result")
+                
+        except KeyError as e:
+            logger.error(f"Depth estimation KeyError: {e}")
+            if isinstance(result, dict):
+                logger.error(f"Available keys in result: {list(result.keys())}")
+            raise ValueError(f"Depth estimation failed - missing key: {e}")
+        except Exception as e:
+            logger.error(f"Depth estimation error: {e}", exc_info=True)
+            raise
         
         # Convert to numpy array
-        depth = np.array(depth, dtype=np.float32)
+        # Transformers pipeline returns PIL Image, convert to numpy
+        if hasattr(depth, 'numpy'):
+            depth = depth.numpy()
+        elif hasattr(depth, 'mode'):  # PIL Image
+            depth = np.array(depth, dtype=np.float32)
+        else:
+            depth = np.array(depth, dtype=np.float32)
+        
+        # Ensure 2D array
+        if len(depth.shape) == 3:
+            depth = depth.squeeze()
+        if len(depth.shape) != 2:
+            raise ValueError(f"Expected 2D depth map, got shape {depth.shape}")
         
         # Normalize to [0, 1]
         depth_min = depth.min()
@@ -221,7 +261,7 @@ class DepthAnythingV2Estimator:
         depth_range = depth_max - depth_min + 1e-8
         depth = (depth - depth_min) / depth_range
         
-        return depth
+        return depth.astype(np.float32)
     
     def _predict_direct(self, image: np.ndarray) -> np.ndarray:
         """Predict depth using direct model loading."""
