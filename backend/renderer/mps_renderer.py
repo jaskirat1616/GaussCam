@@ -149,7 +149,7 @@ class MPSRenderer(Renderer):
         width: int,
         height: int,
     ) -> torch.Tensor:
-        """Render Gaussians using alpha blending (simplified)."""
+        """Render Gaussians using alpha blending with 2D Gaussian projection."""
         # Initialize render buffer
         image = torch.zeros((height, width, 3), device=self.device)
         alpha_buffer = torch.zeros((height, width), device=self.device)
@@ -158,15 +158,135 @@ class MPSRenderer(Renderer):
         sorted_indices = torch.argsort(depths, descending=True)
         
         # Render each Gaussian
-        # Use vectorized operations for better performance
+        sorted_uv = uv[sorted_indices]
+        sorted_depths = depths[sorted_indices]
+        sorted_scales = scales[sorted_indices]
+        sorted_rotations = rotations[sorted_indices]
+        sorted_colors = colors[sorted_indices]
+        sorted_opacities = opacities[sorted_indices]
+        
+        # Create valid mask (wider bounds for 2D Gaussian rendering)
+        valid_mask = (
+            (sorted_uv[:, 0] >= -width) & (sorted_uv[:, 0] < 2 * width) &
+            (sorted_uv[:, 1] >= -height) & (sorted_uv[:, 1] < 2 * height) &
+            (sorted_depths > 0)
+        )
+        
+        # Apply valid mask
+        valid_indices_tensor = torch.where(valid_mask)[0]
+        
+        if valid_indices_tensor.numel() == 0:
+            return image
+        
+        num_valid = valid_indices_tensor.numel()
+        
+        # If too many Gaussians, use simpler point-based rendering for speed
+        if num_valid > 5000:  # Lower threshold for faster rendering
+            # Fallback to faster point-based rendering
+            max_render = min(num_valid, 10000)  # Limit to 10K for speed
+            return self._render_points_fast(
+                sorted_uv, sorted_depths, sorted_colors, sorted_opacities, 
+                width, height, max_render
+            )
+        
+        # Limit rendering for 2D Gaussian projection (slower but higher quality)
+        max_render = min(num_valid, 5000)
+        
+        # Render Gaussians with 2D projection (for smaller counts)
+        for i in range(min(max_render, num_valid)):
+            idx = valid_indices_tensor[i].item()
+            
+            u_center = sorted_uv[idx, 0].item()
+            v_center = sorted_uv[idx, 1].item()
+            depth = sorted_depths[idx].item()
+            scale = sorted_scales[idx]
+            rotation = sorted_rotations[idx]
+            color = sorted_colors[idx]
+            opacity = sorted_opacities[idx].item()
+            
+            # Project 3D Gaussian to 2D (simplified - use scale as 2D radius)
+            # Compute 2D Gaussian radius from 3D scale and depth
+            radius_2d = max(scale[0].item(), scale[1].item(), scale[2].item()) * width / depth
+            radius_2d = min(radius_2d, width / 2.0)  # Limit radius
+            
+            # Compute bounding box
+            u_min = max(0, int(u_center - radius_2d))
+            u_max = min(width, int(u_center + radius_2d) + 1)
+            v_min = max(0, int(v_center - radius_2d))
+            v_max = min(height, int(v_center + radius_2d) + 1)
+            
+            if u_max <= u_min or v_max <= v_min:
+                continue
+            
+            # Render 2D Gaussian ellipse in bounding box
+            u_grid = torch.arange(u_min, u_max, device=self.device).float() + 0.5
+            v_grid = torch.arange(v_min, v_max, device=self.device).float() + 0.5
+            
+            # Create meshgrid - shape will be [u_size, v_size]
+            u_mesh, v_mesh = torch.meshgrid(u_grid, v_grid, indexing='ij')
+            
+            # Distance from center
+            du = u_mesh - u_center
+            dv = v_mesh - v_center
+            dist_sq = (du * du + dv * dv) / (radius_2d * radius_2d + 1e-8)
+            
+            # Gaussian weight (2D Gaussian) - shape [u_size, v_size]
+            weight = torch.exp(-dist_sq * 0.5)
+            weight = weight * opacity
+            
+            # Get slice shapes
+            u_size = u_max - u_min
+            v_size = v_max - v_min
+            
+            # meshgrid with indexing='ij' gives [u_size, v_size], but we need [v_size, u_size] for image indexing
+            # Transpose to match image buffer which is indexed as [height, width] = [v, u]
+            weight = weight.T  # Now shape [v_size, u_size]
+            
+            # Get current alpha values for this region - shape [v_size, u_size]
+            alpha_region = alpha_buffer[v_min:v_max, u_min:u_max]
+            
+            # Compute new alpha contribution - shape [v_size, u_size]
+            alpha_new = weight * (1.0 - alpha_region)
+            
+            # Apply to alpha buffer and image
+            alpha_buffer[v_min:v_max, u_min:u_max] += alpha_new
+            image[v_min:v_max, u_min:u_max] += color.unsqueeze(0).unsqueeze(0) * alpha_new.unsqueeze(-1)
+        
+        # Normalize by alpha
+        alpha_mask = alpha_buffer > 1e-8
+        image[alpha_mask] /= alpha_buffer[alpha_mask].unsqueeze(-1)
+        
+        # Blend with background
+        image = image + self.background_color.unsqueeze(0).unsqueeze(0) * (1.0 - alpha_buffer.unsqueeze(-1))
+        
+        return image
+    
+    def _render_points_fast(
+        self,
+        uv: torch.Tensor,
+        depths: torch.Tensor,
+        colors: torch.Tensor,
+        opacities: torch.Tensor,
+        width: int,
+        height: int,
+        max_points: int,
+    ) -> torch.Tensor:
+        """Fast point-based rendering for large Gaussian counts."""
+        # Initialize render buffer
+        image = torch.zeros((height, width, 3), device=self.device)
+        alpha_buffer = torch.zeros((height, width), device=self.device)
+        
+        # Sort by depth (back to front)
+        sorted_indices = torch.argsort(depths, descending=True)
+        
+        # Limit to max_points
+        sorted_indices = sorted_indices[:max_points]
+        
+        # Get sorted values
         sorted_uv = uv[sorted_indices]
         sorted_depths = depths[sorted_indices]
         sorted_colors = colors[sorted_indices]
         sorted_opacities = opacities[sorted_indices]
-        
-        # Clamp UV coordinates to image bounds
-        u_coords = sorted_uv[:, 0].clamp(0, width - 1).long()
-        v_coords = sorted_uv[:, 1].clamp(0, height - 1).long()
         
         # Create valid mask
         valid_mask = (
@@ -175,36 +295,35 @@ class MPSRenderer(Renderer):
             (sorted_depths > 0)
         )
         
-        # Apply valid mask and render
-        valid_indices_tensor = torch.where(valid_mask)[0]
+        # Apply valid mask
+        valid_indices = torch.where(valid_mask)[0]
         
-        if valid_indices_tensor.numel() > 0:
-            u_valid = u_coords[valid_indices_tensor]
-            v_valid = v_coords[valid_indices_tensor]
-            colors_valid = sorted_colors[valid_indices_tensor]
-            opacities_valid = sorted_opacities[valid_indices_tensor]
+        if valid_indices.numel() == 0:
+            # Blend with background
+            image = image + self.background_color.unsqueeze(0).unsqueeze(0) * (1.0 - alpha_buffer.unsqueeze(-1))
+            return image
+        
+        # Get valid coordinates
+        u_coords = sorted_uv[valid_indices, 0].clamp(0, width - 1).long()
+        v_coords = sorted_uv[valid_indices, 1].clamp(0, height - 1).long()
+        valid_colors = sorted_colors[valid_indices]
+        valid_opacities = sorted_opacities[valid_indices]
+        
+        # Render points (simple alpha blending) - vectorized for speed
+        # Limit to max_points for performance
+        num_to_render = min(valid_indices.numel(), max_points)
+        
+        for i in range(num_to_render):
+            u_int = u_coords[i].item()
+            v_int = v_coords[i].item()
+            color = valid_colors[i]
+            opacity = valid_opacities[i].item()
             
-            # Render valid Gaussians (limit to first N for speed)
-            num_valid = valid_indices_tensor.numel()
-            max_render = min(num_valid, 50000)  # Limit rendering for speed
-            
-            # Use vectorized operations where possible
-            u_valid_limited = u_valid[:max_render]
-            v_valid_limited = v_valid[:max_render]
-            colors_valid_limited = colors_valid[:max_render]
-            opacities_valid_limited = opacities_valid[:max_render]
-            
-            for i in range(max_render):
-                u_int = u_valid_limited[i].item()
-                v_int = v_valid_limited[i].item()
-                color = colors_valid_limited[i]
-                opacity = opacities_valid_limited[i].item()
-                
-                # Alpha blending
-                if alpha_buffer[v_int, u_int] < 1.0:
-                    alpha = opacity * (1.0 - alpha_buffer[v_int, u_int])
-                    image[v_int, u_int] += color * alpha
-                    alpha_buffer[v_int, u_int] += alpha
+            # Alpha blending
+            if alpha_buffer[v_int, u_int] < 1.0:
+                alpha = opacity * (1.0 - alpha_buffer[v_int, u_int])
+                image[v_int, u_int] += color * alpha
+                alpha_buffer[v_int, u_int] += alpha
         
         # Normalize by alpha
         alpha_mask = alpha_buffer > 1e-8

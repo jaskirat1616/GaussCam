@@ -127,7 +127,8 @@ class ProcessingThread(QThread):
             
             # Processing loop with optimizations
             frame_count = 0
-            depth_skip_frames = 3  # Process depth every N frames
+            depth_skip_frames = 5  # Process depth every N frames (increased for speed)
+            frame_skip = 2  # Skip N frames between processing (process every Nth frame)
             last_depth = None
             
             while not self.stop_flag:
@@ -137,6 +138,14 @@ class ProcessingThread(QThread):
                     if self.input_source == "video":
                         # End of video
                         break
+                    self.msleep(10)
+                    continue
+                
+                print(f"Frame {frame_count} read: shape={frame.shape if hasattr(frame, 'shape') else 'unknown'}")
+                
+                # Skip frames for performance
+                if frame_count % (frame_skip + 1) != 0:
+                    frame_count += 1
                     self.msleep(10)
                     continue
                 
@@ -152,8 +161,20 @@ class ProcessingThread(QThread):
                     else:
                         frame = frame.astype(np.float32)
                 
+                # Display original frame first for immediate feedback
+                if frame_count == 0:
+                    # Show original frame immediately
+                    display_frame = frame.copy()
+                    if display_frame.max() <= 1.0:
+                        display_frame = (display_frame * 255).astype(np.uint8)
+                    else:
+                        display_frame = display_frame.astype(np.uint8)
+                    self.frame_ready.emit(display_frame)
+                    print(f"Displayed initial frame: shape={display_frame.shape}")
+                
                 # Estimate depth (skip frames for speed)
                 if frame_count % depth_skip_frames == 0 or last_depth is None:
+                    print(f"Estimating depth for frame {frame_count}...")
                     try:
                         # Resize frame for faster depth estimation (if too large)
                         h, w = frame.shape[:2]
@@ -166,8 +187,11 @@ class ProcessingThread(QThread):
                         else:
                             depth = self.depth_estimator.estimate_depth(frame, postprocess=True)
                         last_depth = depth
+                        print(f"Depth estimated: shape={depth.shape}, min={depth.min():.3f}, max={depth.max():.3f}")
                     except Exception as e:
                         print(f"Depth estimation error: {e}")
+                        import traceback
+                        traceback.print_exc()
                         if last_depth is not None:
                             depth = last_depth
                         else:
@@ -178,39 +202,62 @@ class ProcessingThread(QThread):
                     depth = last_depth
                 
                 # Convert to point cloud (with aggressive downsampling)
+                print(f"Converting to point cloud...")
                 try:
-                    points, colors = depth_to_point_cloud(
-                        depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
-                    )
+                    # Downsample depth map first for speed
+                    h, w = depth.shape[:2]
+                    if h * w > 50000:  # If too many pixels, downsample first
+                        scale = np.sqrt(50000 / (h * w))
+                        small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
+                        small_depth = cv2.resize(depth, (small_w, small_h))
+                        small_frame = cv2.resize(frame, (small_w, small_h))
+                        points, colors = depth_to_point_cloud(
+                            small_depth, small_frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
+                        )
+                    else:
+                        points, colors = depth_to_point_cloud(
+                            depth, frame, self.intrinsics, depth_scale=5.0, max_depth=10.0
+                        )
+                    print(f"Point cloud: {len(points)} points")
                     
                     # Aggressive downsampling for speed
-                    if len(points) > 10000:
+                    if len(points) > 5000:  # Lower threshold
                         from backend.utils.point_cloud import downsample_point_cloud
-                        voxel_size = 0.05  # Larger voxels for speed
+                        voxel_size = 0.08  # Larger voxels for more aggressive downsampling
                         points, colors = downsample_point_cloud(points, colors, voxel_size=voxel_size)
+                        print(f"Downsampled to {len(points)} points")
                 except Exception as e:
                     print(f"Point cloud conversion error: {e}")
+                    import traceback
+                    traceback.print_exc()
                     self.msleep(100)
                     continue
                 
                 if len(points) > 0:
                     try:
                         # Fit Gaussians (use uniform method for speed)
+                        print(f"Fitting Gaussians from {len(points)} points...")
                         gaussians = self.gaussian_fitter.fit_downsampled(
-                            points, colors, max_gaussians=20000, method="uniform"  # Reduced count and faster method
+                            points, colors, max_gaussians=10000, method="uniform"  # Faster uniform method
                         )
+                        print(f"Fitted {gaussians.num_gaussians} Gaussians")
                         
                         # Merge with accumulated
+                        print(f"Merging Gaussians...")
                         merged_gaussians = self.gaussian_merger.merge(
                             gaussians, merge_strategy="weighted"
                         )
+                        print(f"Merged to {merged_gaussians.num_gaussians} Gaussians")
                         
                         # Render
                         if self.renderer is not None and merged_gaussians.num_gaussians > 0:
                             try:
+                                print(f"Rendering {merged_gaussians.num_gaussians} Gaussians...")
                                 rendered = self.renderer.render(merged_gaussians)
+                                print(f"Rendered frame: shape={rendered.shape}, min={rendered.min():.3f}, max={rendered.max():.3f}")
                                 # Emit frame for display
                                 self.frame_ready.emit(rendered)
+                                print(f"Frame emitted to UI")
                             except Exception as e:
                                 print(f"Rendering error: {e}")
                                 import traceback
@@ -230,8 +277,8 @@ class ProcessingThread(QThread):
                 
                 frame_count += 1
                 
-                # Small delay to prevent CPU spinning (~15-30 FPS)
-                self.msleep(50)  # Reduced from 33ms for better performance
+                # Small delay to prevent CPU spinning
+                self.msleep(100)  # Increased delay for better performance balance
         
         except Exception as e:
             import traceback
@@ -389,6 +436,23 @@ class MainWindow(QMainWindow):
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self._select_video_file)
         file_menu.addAction(open_action)
+        
+        # Export menu
+        export_menu = file_menu.addMenu("Export")
+        
+        export_gaussians_action = QAction("Save Gaussians...", self)
+        export_gaussians_action.triggered.connect(self._export_gaussians)
+        export_menu.addAction(export_gaussians_action)
+        
+        load_gaussians_action = QAction("Load Gaussians...", self)
+        load_gaussians_action.triggered.connect(self._load_gaussians)
+        export_menu.addAction(load_gaussians_action)
+        
+        export_video_action = QAction("Export Rendered Video...", self)
+        export_video_action.triggered.connect(self._export_video)
+        export_menu.addAction(export_video_action)
+        
+        file_menu.addSeparator()
         
         exit_action = QAction("Exit", self)
         exit_action.setShortcut(QKeySequence.StandardKey.Quit)
@@ -622,6 +686,202 @@ class MainWindow(QMainWindow):
         print("Processing finished")
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        
+        # Show completion message
+        if self.processing_thread is not None:
+            if hasattr(self.processing_thread, 'gaussian_merger') and \
+               self.processing_thread.gaussian_merger is not None:
+                gaussians = self.processing_thread.gaussian_merger.accumulated_gaussians
+                if gaussians is not None:
+                    QMessageBox.information(
+                        self,
+                        "Processing Complete",
+                        f"Processing finished successfully!\n\n"
+                        f"Total Gaussians: {gaussians.num_gaussians}\n"
+                        f"Frames processed: {self.processing_thread.gaussian_merger.frame_count}\n\n"
+                        f"You can now:\n"
+                        f"- Export Gaussians (File > Export > Save Gaussians)\n"
+                        f"- Export rendered video (File > Export > Export Rendered Video)\n"
+                        f"- Adjust novel view controls",
+                    )
+    
+    def _export_gaussians(self) -> None:
+        """Export Gaussians to file."""
+        if self.processing_thread is None or not hasattr(self.processing_thread, 'gaussian_merger'):
+            QMessageBox.warning(
+                self,
+                "No Data",
+                "No Gaussians to export. Please process a video or webcam first.",
+            )
+            return
+        
+        gaussians = self.processing_thread.gaussian_merger.accumulated_gaussians
+        if gaussians is None:
+            QMessageBox.warning(
+                self,
+                "No Data",
+                "No Gaussians to export. Please process a video or webcam first.",
+            )
+            return
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Gaussians",
+            "",
+            "Pickle Files (*.pkl);;All Files (*)",
+        )
+        
+        if file_path:
+            try:
+                import pickle
+                data = {
+                    "centroids": gaussians.centroids,
+                    "scales": gaussians.scales,
+                    "rotations": gaussians.rotations,
+                    "colors": gaussians.colors,
+                    "opacity": gaussians.opacity,
+                }
+                with open(file_path, "wb") as f:
+                    pickle.dump(data, f)
+                QMessageBox.information(
+                    self,
+                    "Export Successful",
+                    f"Saved {gaussians.num_gaussians} Gaussians to:\n{file_path}",
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Export Error",
+                    f"Failed to export Gaussians:\n{str(e)}",
+                )
+    
+    def _load_gaussians(self) -> None:
+        """Load Gaussians from file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Gaussians",
+            "",
+            "Pickle Files (*.pkl);;All Files (*)",
+        )
+        
+        if file_path:
+            try:
+                import pickle
+                from backend.gaussian.fitter import Gaussian
+                
+                with open(file_path, "rb") as f:
+                    data = pickle.load(f)
+                
+                gaussians = Gaussian(
+                    centroids=data["centroids"],
+                    covariances=None,
+                    colors=data["colors"],
+                    opacity=data["opacity"],
+                    scales=data["scales"],
+                    rotations=data["rotations"],
+                )
+                
+                # Initialize merger with loaded Gaussians
+                if self.processing_thread is None:
+                    from backend.gaussian.merger import GaussianMerger
+                    merger = GaussianMerger(merge_threshold=0.01, max_gaussians=500000)
+                    merger.accumulated_gaussians = gaussians
+                    merger.frame_count = 1
+                    
+                    # Create a dummy processing thread for rendering
+                    self.processing_thread = type('obj', (object,), {
+                        'gaussian_merger': merger,
+                        'isRunning': lambda: False,
+                    })()
+                
+                # Render loaded Gaussians
+                if self.renderer is None:
+                    self._setup_renderer()
+                
+                if self.renderer is not None:
+                    rendered = self.renderer.render(gaussians)
+                    if self.render_widget is not None:
+                        self.render_widget.set_frame(rendered)
+                    
+                    QMessageBox.information(
+                        self,
+                        "Load Successful",
+                        f"Loaded {gaussians.num_gaussians} Gaussians from:\n{file_path}",
+                    )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Load Error",
+                    f"Failed to load Gaussians:\n{str(e)}",
+                )
+    
+    def _export_video(self) -> None:
+        """Export rendered video."""
+        if self.processing_thread is None or not hasattr(self.processing_thread, 'gaussian_merger'):
+            QMessageBox.warning(
+                self,
+                "No Data",
+                "No Gaussians to export. Please process a video or webcam first.",
+            )
+            return
+        
+        gaussians = self.processing_thread.gaussian_merger.accumulated_gaussians
+        if gaussians is None:
+            QMessageBox.warning(
+                self,
+                "No Data",
+                "No Gaussians to export. Please process a video or webcam first.",
+            )
+            return
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Rendered Video",
+            "",
+            "Video Files (*.mp4);;All Files (*)",
+        )
+        
+        if file_path:
+            try:
+                import cv2
+                
+                if self.renderer is None:
+                    self._setup_renderer()
+                
+                if self.renderer is None:
+                    QMessageBox.warning(
+                        self,
+                        "No Renderer",
+                        "Failed to initialize renderer for export.",
+                    )
+                    return
+                
+                # Render single frame
+                rendered = self.renderer.render(gaussians)
+                h, w = rendered.shape[:2]
+                
+                # Create video writer
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                fps = 30
+                video_writer = cv2.VideoWriter(file_path, fourcc, fps, (w, h))
+                
+                # Convert and write frame
+                output_frame = (rendered * 255).astype(np.uint8)
+                output_frame = cv2.cvtColor(output_frame, cv2.COLOR_RGB2BGR)
+                video_writer.write(output_frame)
+                video_writer.release()
+                
+                QMessageBox.information(
+                    self,
+                    "Export Successful",
+                    f"Exported rendered frame to:\n{file_path}",
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Export Error",
+                    f"Failed to export video:\n{str(e)}",
+                )
     
     def _reset_view(self) -> None:
         """Reset novel view."""
@@ -659,4 +919,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
