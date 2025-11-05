@@ -189,13 +189,14 @@ class DepthAnythingV2Estimator:
             raise
     
     def _load_direct(self) -> None:
-        """Load model directly (requires depth_anything_v2 package)."""
+        """Load model directly from repository (requires depth_anything_v2 package)."""
         if not DEPTH_ANYTHING_V2_AVAILABLE:
             raise ImportError(
-                "depth_anything_v2 package required. "
+                "depth_anything_v2 package not available. "
                 "Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
             )
         
+        # Model configurations from the repository (as per README)
         model_configs = {
             'small': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
             'base': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
@@ -210,29 +211,76 @@ class DepthAnythingV2Estimator:
         config = model_configs[self.model_size]
         encoder = config['encoder']
         
-        logger.info(f"Loading Depth Anything V2 ({self.model_size}) directly...")
+        logger.info(f"Loading Depth Anything V2 ({self.model_size}) directly from repository...")
         logger.info(f"Encoder: {encoder}")
         logger.info(f"Device: {self.device}")
         
-        try:
-            self.depth_anything_model = DepthAnythingV2(**config)
+        # Create model
+        self.depth_anything_model = DepthAnythingV2(**config)
+        
+        # Load checkpoint
+        checkpoint_name = f"depth_anything_v2_{encoder}.pth"
+        
+        # Try to find checkpoint in common locations
+        checkpoint_paths = []
+        if self.checkpoint_path:
+            checkpoint_paths.append(Path(self.checkpoint_path))
+        checkpoint_paths.extend([
+            Path("checkpoints") / checkpoint_name,  # Local checkpoints directory
+            Path.home() / ".cache" / "depth_anything_v2" / checkpoint_name,  # Cache directory
+        ])
+        
+        checkpoint_path = None
+        for path in checkpoint_paths:
+            if path and path.exists():
+                checkpoint_path = path
+                logger.info(f"Found checkpoint at: {checkpoint_path}")
+                break
+        
+        if checkpoint_path is None:
+            # Try to download from HuggingFace
+            model_name_capitalized = self.model_size.capitalize()
+            checkpoint_url = f"https://huggingface.co/depth-anything/Depth-Anything-V2-{model_name_capitalized}/resolve/main/{checkpoint_name}"
+            logger.info(f"Checkpoint not found locally. Downloading from HuggingFace...")
+            logger.info(f"URL: {checkpoint_url}")
             
-            # Load checkpoint
-            checkpoint_path = f"checkpoints/depth_anything_v2_{encoder}.pth"
-            if not Path(checkpoint_path).exists():
+            # Download checkpoint
+            import urllib.request
+            checkpoint_dir = Path.home() / ".cache" / "depth_anything_v2"
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint_path = checkpoint_dir / checkpoint_name
+            
+            try:
+                logger.info(f"Downloading checkpoint (this may take a while)...")
+                urllib.request.urlretrieve(checkpoint_url, checkpoint_path)
+                logger.info(f"Checkpoint downloaded to: {checkpoint_path}")
+            except Exception as e:
+                logger.error(f"Failed to download checkpoint: {e}")
                 raise FileNotFoundError(
-                    f"Checkpoint not found: {checkpoint_path}. "
-                    "Please download from https://github.com/DepthAnything/Depth-Anything-V2"
+                    f"Checkpoint not found and download failed. "
+                    f"Please download {checkpoint_name} from "
+                    f"https://huggingface.co/depth-anything/Depth-Anything-V2-{model_name_capitalized}/resolve/main/{checkpoint_name} "
+                    f"and place it in the 'checkpoints' directory or provide the path."
                 )
+        
+        # Load checkpoint
+        logger.info(f"Loading checkpoint from: {checkpoint_path}")
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
             
-            self.depth_anything_model.load_state_dict(
-                torch.load(checkpoint_path, map_location='cpu')
-            )
+            # Handle different checkpoint formats
+            if isinstance(checkpoint, dict):
+                if 'model' in checkpoint:
+                    checkpoint = checkpoint['model']
+                elif 'state_dict' in checkpoint:
+                    checkpoint = checkpoint['state_dict']
+            
+            self.depth_anything_model.load_state_dict(checkpoint, strict=False)
             self.depth_anything_model = self.depth_anything_model.to(self.device).eval()
             
-            logger.info("Depth Anything V2 model loaded successfully")
+            logger.info("Depth Anything V2 model loaded successfully (direct from repository)")
         except Exception as e:
-            logger.error(f"Failed to load Depth Anything V2 directly: {e}")
+            logger.error(f"Failed to load checkpoint: {e}")
             raise
     
     def preprocess(self, image: np.ndarray) -> np.ndarray:
