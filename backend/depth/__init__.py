@@ -1,2 +1,2 @@
-"""Monocular depth estimation using MiDaS."""
+"""Depth estimation using MiDaS."""
 

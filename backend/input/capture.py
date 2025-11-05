@@ -242,7 +242,7 @@ class FramePreprocessor:
 
 
 class AsyncFrameCapture:
-    """Asynchronous frame capture with queue for real-time processing."""
+    """Asynchronous frame capture with queue for processing pipeline."""
     
     def __init__(
         self,

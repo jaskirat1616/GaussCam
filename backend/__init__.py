@@ -1,7 +1,7 @@
 """
 GaussCam Backend
 
-Production-ready real-time monocular Gaussian Splatting renderer.
+Gaussian Splatting renderer for CUDA and MPS.
 """
 
 __version__ = "0.1.0"
