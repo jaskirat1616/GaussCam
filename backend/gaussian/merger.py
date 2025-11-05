@@ -1,13 +1,15 @@
-"""
-Gaussian Merging Module
+"""Gaussian merging utilities including temporal-aware variants."""
 
-Temporal Gaussian merging for frame-to-frame consistency and LOD management.
-"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
-from typing import Optional, List
 from scipy.spatial import cKDTree
+
 from backend.gaussian.fitter import Gaussian
+from backend.gaussian.four_d import Gaussian4D, GaussianMotion, TemporalHierarchy
 
 
 class GaussianMerger:
@@ -287,4 +289,166 @@ class LODManager:
     def set_level(self, level: int) -> None:
         """Set current LOD level."""
         self.current_level = np.clip(level, 0, self.levels - 1)
+
+
+@dataclass
+class TemporalMergeStats:
+    """Statistics captured during temporal merges."""
+
+    spawned_children: int = 0
+    pruned_nodes: int = 0
+    average_residual: float = 0.0
+
+
+class TemporalGaussianMerger:
+    """Temporal merger managing deformable Gaussians and hierarchy updates."""
+
+    def __init__(
+        self,
+        hierarchy: TemporalHierarchy,
+        residual_threshold: float = 0.02,
+        psnr_target: float = 35.0,
+        importance_update: Optional[Callable[[float, float], float]] = None,
+    ) -> None:
+        self.hierarchy = hierarchy
+        self.residual_threshold = residual_threshold
+        self.psnr_target = psnr_target
+        self.importance_update = importance_update
+
+    def accumulate(
+        self,
+        cluster_id: int,
+        new_gaussian: Gaussian4D,
+        frame_psnr: float,
+        frame_ate: float,
+        level: int = 0,
+    ) -> TemporalMergeStats:
+        cluster = self.hierarchy._clusters.get(cluster_id)
+        stats = TemporalMergeStats()
+
+        if cluster is None:
+            self.hierarchy.register_cluster(
+                gaussian=new_gaussian,
+                importance_score=self._evaluate_importance(frame_psnr, frame_ate),
+                keyframe_time=float(np.mean(new_gaussian.timestamps)),
+                level=level,
+            )
+            return stats
+
+        base_gaussian = cluster.gaussian
+        merged_gaussian, residual = self._merge_gaussian4d(base_gaussian, new_gaussian)
+
+        cluster.gaussian = merged_gaussian
+        average_residual = float(np.mean(residual)) if residual.size else 0.0
+        stats.average_residual = average_residual
+
+        importance = self._evaluate_importance(frame_psnr, frame_ate)
+        cluster.update_importance(
+            psnr_delta=importance - self.psnr_target,
+            ate_delta=-frame_ate,
+        )
+
+        if average_residual > self.residual_threshold:
+            child_cluster = self.hierarchy.register_cluster(
+                gaussian=new_gaussian,
+                importance_score=importance,
+                keyframe_time=float(np.max(new_gaussian.timestamps)),
+                level=level + 1,
+                parent_cluster=cluster_id,
+            )
+            stats.spawned_children += 1
+            cluster.child_ids.append(child_cluster.cluster_id)
+
+        return stats
+
+    def prune(self, target_counts: Optional[dict] = None) -> TemporalMergeStats:
+        stats = TemporalMergeStats()
+        if target_counts:
+            pruned = self.hierarchy.rebalance_levels(target_counts)
+            stats.pruned_nodes = len(pruned)
+        return stats
+
+    def _merge_gaussian4d(self, base: Gaussian4D, new: Gaussian4D) -> Tuple[Gaussian4D, np.ndarray]:
+        gaussian = self._merge_static(base.gaussian, new.gaussian)
+        motion = self._blend_motion(base.motion, new.motion)
+        timestamps = np.maximum(base.timestamps, new.timestamps)
+        hierarchy_ids = base.hierarchy_ids
+        parent_ids = base.parent_ids
+        residual = self._compute_residual(base, new)
+
+        merged = Gaussian4D(
+            gaussian=gaussian,
+            motion=motion,
+            timestamps=timestamps,
+            hierarchy_ids=hierarchy_ids,
+            parent_ids=parent_ids,
+            deformation=base.deformation or new.deformation,
+            residual_error=residual,
+        )
+
+        return merged, residual
+
+    def _merge_static(self, base: Gaussian, new: Gaussian) -> Gaussian:
+        if base.num_gaussians != new.num_gaussians:
+            combined_centroids = np.concatenate([base.centroids, new.centroids], axis=0)
+            combined_colors = np.concatenate([base.colors, new.colors], axis=0)
+            combined_opacity = np.concatenate([base.opacity, new.opacity], axis=0)
+            combined_scales = np.concatenate([base.scales, new.scales], axis=0)
+            combined_rotations = np.concatenate([base.rotations, new.rotations], axis=0)
+            return Gaussian(
+                centroids=combined_centroids,
+                covariances=None,
+                colors=combined_colors,
+                opacity=combined_opacity,
+                scales=combined_scales,
+                rotations=combined_rotations,
+            )
+
+        blend = 0.5
+        centroids = blend * base.centroids + (1.0 - blend) * new.centroids
+        colors = blend * base.colors + (1.0 - blend) * new.colors
+        opacity = np.clip(blend * base.opacity + (1.0 - blend) * new.opacity, 0.0, 1.0)
+        scales = blend * base.scales + (1.0 - blend) * new.scales
+        rotations = base.rotations
+
+        return Gaussian(
+            centroids=centroids.astype(np.float32),
+            covariances=None,
+            colors=colors.astype(np.float32),
+            opacity=opacity.astype(np.float32),
+            scales=scales.astype(np.float32),
+            rotations=rotations.astype(np.float32),
+        )
+
+    def _blend_motion(self, base: GaussianMotion, new: GaussianMotion) -> GaussianMotion:
+        alpha = 0.5
+        translation = alpha * base.translation + (1 - alpha) * new.translation
+        rotation = alpha * base.rotation_axis_angle + (1 - alpha) * new.rotation_axis_angle
+        scale = alpha * base.scale_velocity + (1 - alpha) * new.scale_velocity
+
+        if base.deformation_weights is None and new.deformation_weights is None:
+            deformation = None
+        else:
+            base_weights = base.deformation_weights or np.zeros_like(new.deformation_weights)
+            new_weights = new.deformation_weights or np.zeros_like(base_weights)
+            deformation = alpha * base_weights + (1 - alpha) * new_weights
+
+        return GaussianMotion(
+            translation=translation,
+            rotation_axis_angle=rotation,
+            scale_velocity=scale,
+            deformation_weights=deformation,
+        )
+
+    def _compute_residual(self, base: Gaussian4D, new: Gaussian4D) -> np.ndarray:
+        position_residual = np.linalg.norm(base.gaussian.centroids - new.gaussian.centroids, axis=-1)
+        color_residual = np.linalg.norm(base.gaussian.colors - new.gaussian.colors, axis=-1)
+        motion_residual = np.linalg.norm(base.motion.translation - new.motion.translation, axis=-1)
+        residual = 0.5 * position_residual + 0.3 * color_residual + 0.2 * motion_residual
+        return residual.astype(np.float32)
+
+    def _evaluate_importance(self, psnr: float, ate: float) -> float:
+        if self.importance_update is not None:
+            return float(self.importance_update(psnr, ate))
+        return psnr - ate * 10.0
 
