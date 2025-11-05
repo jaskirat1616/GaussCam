@@ -20,12 +20,12 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QMessageBox,
 )
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from typing import Optional
 import sys
 
-# from backend.ui.render_widget import RenderWidget  # Defer import
+from backend.ui.render_widget import RenderWidget
 from backend.utils.gpu_detection import get_gpu_detector, is_cuda, is_mps
 from backend.renderer.base import Renderer
 from backend.renderer.cuda_renderer import CUDARenderer
@@ -91,16 +91,13 @@ class MainWindow(QMainWindow):
         # Main layout
         main_layout = QHBoxLayout(central_widget)
         
-        # Render widget (defer initialization to avoid Metal conflicts)
+        # Render widget (will be initialized after GPU detection)
         self.render_widget = None
-        # self.render_widget = RenderWidget(self, width=640, height=480)
-        # main_layout.addWidget(self.render_widget, stretch=3)
-        
-        # Placeholder label
-        placeholder = QLabel("Rendering will be initialized after GPU detection")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setMinimumSize(640, 480)
-        main_layout.addWidget(placeholder, stretch=3)
+        self.render_placeholder = QLabel("Initializing GPU detection...")
+        self.render_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.render_placeholder.setMinimumSize(640, 480)
+        self.render_placeholder.setStyleSheet("background-color: #1e1e1e; color: white; font-size: 14px;")
+        main_layout.addWidget(self.render_placeholder, stretch=3)
         
         # Control panel
         control_panel = self._create_control_panel()
@@ -227,9 +224,60 @@ class MainWindow(QMainWindow):
             status_text = f"Backend: {self.backend.upper()}\nDevice: {self.gpu_detector.device_name}"
             if hasattr(self, 'status_label'):
                 self.status_label.setText(status_text)
+            
+            # Update placeholder text
+            if hasattr(self, 'render_placeholder'):
+                self.render_placeholder.setText(f"GPU: {self.backend.upper()}\nReady to render")
+            
+            # Defer render widget initialization using QTimer to avoid Metal conflicts
+            # This ensures the event loop has started before creating RenderWidget
+            QTimer.singleShot(100, self._init_render_widget)
         except Exception as e:
             print(f"Warning: GPU detection failed: {e}")
             self.backend = "cpu"
+            if hasattr(self, 'render_placeholder'):
+                self.render_placeholder.setText(f"GPU detection failed: {e}")
+    
+    def _init_render_widget(self) -> None:
+        """Initialize render widget after GPU detection."""
+        if self.render_widget is not None:
+            return  # Already initialized
+        
+        if not hasattr(self, 'render_placeholder') or self.render_placeholder is None:
+            print("Warning: render_placeholder not found")
+            return
+        
+        try:
+            # Get the parent widget and its layout
+            parent_widget = self.render_placeholder.parent()
+            if parent_widget is None:
+                print("Warning: render_placeholder has no parent")
+                return
+            
+            layout = parent_widget.layout()
+            if layout is None:
+                print("Warning: parent has no layout")
+                return
+            
+            # Remove placeholder from layout
+            layout.removeWidget(self.render_placeholder)
+            self.render_placeholder.hide()
+            self.render_placeholder.deleteLater()
+            
+            # Create and add render widget
+            self.render_widget = RenderWidget(self, width=640, height=480)
+            layout.addWidget(self.render_widget, stretch=3)
+            
+            # Clear placeholder reference
+            self.render_placeholder = None
+            
+            print("RenderWidget initialized successfully")
+        except Exception as e:
+            print(f"Warning: Failed to initialize RenderWidget: {e}")
+            import traceback
+            traceback.print_exc()
+            if hasattr(self, 'render_placeholder') and self.render_placeholder is not None:
+                self.render_placeholder.setText(f"Render widget initialization failed: {e}")
     
     def _setup_renderer(self) -> None:
         """Setup renderer based on GPU backend (lazy initialization)."""

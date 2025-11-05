@@ -89,7 +89,7 @@ class RenderWidget(QWidget):
     
     def resizeEvent(self, event) -> None:
         """Resize event handler."""
-        self.width = self.width()
-        self.height = self.height()
+        # Note: Don't override self.width/height as they conflict with QWidget methods
+        # Store as separate attributes if needed
         super().resizeEvent(event)
 
