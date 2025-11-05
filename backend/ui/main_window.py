@@ -208,12 +208,12 @@ class ProcessingThread(QThread):
             is_video = self.input_source == "video"
             
             if performance_mode == "Fast":
-                depth_skip_frames = 20 if is_video else 15  # More skipping for video
-                frame_skip = 15 if is_video else 8  # Process every 16th frame for video
-                max_gaussians = 3000
-                target_size = 256
-                target_pixels = 15000
-                voxel_size = 0.15
+                depth_skip_frames = 25 if is_video else 20  # More skipping for video
+                frame_skip = 20 if is_video else 10  # Process every 21st frame for video
+                max_gaussians = 2000  # Fewer Gaussians for speed
+                target_size = 240  # Smaller for speed
+                target_pixels = 12000  # More aggressive downsampling
+                voxel_size = 0.18  # Larger voxels
             elif performance_mode == "Quality":
                 depth_skip_frames = 10 if is_video else 5
                 frame_skip = 5 if is_video else 2
@@ -222,12 +222,12 @@ class ProcessingThread(QThread):
                 target_pixels = 30000
                 voxel_size = 0.08
             else:  # Balanced
-                depth_skip_frames = 15 if is_video else 10
-                frame_skip = 10 if is_video else 5  # Process every 11th frame for video
-                max_gaussians = 5000
-                target_size = 320
-                target_pixels = 20000
-                voxel_size = 0.10
+                depth_skip_frames = 12 if is_video else 8
+                frame_skip = 8 if is_video else 5  # Process every 9th frame for video
+                max_gaussians = 4000  # Fewer for speed
+                target_size = 300  # Slightly smaller
+                target_pixels = 25000  # More aggressive
+                voxel_size = 0.12  # Larger voxels
             
             last_depth = None
             last_rendered = None  # Cache last rendered frame
@@ -243,7 +243,7 @@ class ProcessingThread(QThread):
                     # For webcam, keep trying - don't exit immediately
                     consecutive_none_frames += 1
                     if consecutive_none_frames > max_none_frames:
-                        print(f"Warning: {consecutive_none_frames} consecutive None frames, continuing...")
+                        logger.warning(f"{consecutive_none_frames} consecutive None frames, continuing...")
                         consecutive_none_frames = 0  # Reset counter
                     self.msleep(100)
                     continue
@@ -293,7 +293,7 @@ class ProcessingThread(QThread):
                 # Estimate depth (skip frames for speed)
                 if frame_count % depth_skip_frames == 0 or last_depth is None:
                     depth_start_time = time.time()
-                    print(f"Estimating depth for frame {frame_count}...")
+                    logger.info(f"Estimating depth for frame {frame_count}...")
                     try:
                         # Always resize for faster depth estimation
                         h, w = frame.shape[:2]
