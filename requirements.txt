@@ -1,0 +1,38 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# GUI
+PySide6>=6.6.0
+
+# Gaussian Splatting (CUDA)
+gsplat>=0.1.0
+
+# Depth estimation
+transformers>=4.30.0
+timm>=0.9.0
+
+# ONNX Runtime (optional, for faster depth inference)
+onnxruntime>=1.15.0
+onnxruntime-gpu>=1.15.0; sys_platform == 'win32' or sys_platform == 'linux'
+
+# Optical flow (RAFT)
+torchvision  # Includes RAFT implementation
+
+# Utilities
+tqdm>=4.65.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+
+# Video processing
+moviepy>=1.0.3
+
+# Development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.7.0
+flake8>=6.1.0
+
