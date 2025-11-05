@@ -584,51 +584,66 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Main layout (vertical for camera + 3D viewer)
-        main_layout = QVBoxLayout(central_widget)
+        # Main layout (horizontal: camera view + controls)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Top row: Camera view and controls
-        top_row = QHBoxLayout()
+        # Left side: Camera view
+        camera_container = QWidget()
+        camera_layout = QVBoxLayout(camera_container)
+        camera_layout.setContentsMargins(0, 0, 0, 0)
         
         # Render widget (will be initialized after GPU detection)
         self.render_widget = None
         self.render_placeholder = QLabel("Initializing GPU detection...")
         self.render_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.render_placeholder.setMinimumSize(640, 480)
-        self.render_placeholder.setStyleSheet("background-color: #1e1e1e; color: white; font-size: 14px;")
-        top_row.addWidget(self.render_placeholder, stretch=3)
+        self.render_placeholder.setMaximumSize(1280, 960)
+        self.render_placeholder.setStyleSheet(
+            "background-color: #1e1e1e; color: white; font-size: 14px; border: 1px solid #333;"
+        )
+        camera_layout.addWidget(self.render_placeholder)
         
-        # Control panel
-        control_panel = self._create_control_panel()
-        top_row.addWidget(control_panel, stretch=1)
-        
-        main_layout.addLayout(top_row, stretch=2)
-        
-        # Bottom row: 3D Viewer
+        # 3D Viewer below camera (optional, can be collapsed)
         viewer_group = QGroupBox("3D Scene Viewer")
+        viewer_group.setCheckable(True)
+        viewer_group.setChecked(False)  # Collapsed by default
+        viewer_group.setMaximumHeight(300)
         viewer_layout = QVBoxLayout()
+        viewer_layout.setContentsMargins(5, 5, 5, 5)
         
         try:
             from backend.ui.viewer_3d import Viewer3DWidget
             self.viewer_3d = Viewer3DWidget(self)
             if self.viewer_3d.is_available:
                 viewer_layout.addWidget(self.viewer_3d)
-                self.viewer_3d.setMinimumHeight(300)
+                self.viewer_3d.setMinimumHeight(200)
+                self.viewer_3d.setMaximumHeight(300)
                 logger.info("3D viewer initialized")
             else:
                 viewer_label = QLabel("3D viewer not available (OpenGL required)")
                 viewer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                viewer_label.setStyleSheet("color: #888; padding: 20px;")
                 viewer_layout.addWidget(viewer_label)
                 self.viewer_3d = None
         except Exception as e:
             logger.warning(f"Failed to initialize 3D viewer: {e}")
             viewer_label = QLabel("3D viewer not available")
             viewer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            viewer_label.setStyleSheet("color: #888; padding: 20px;")
             viewer_layout.addWidget(viewer_label)
             self.viewer_3d = None
         
         viewer_group.setLayout(viewer_layout)
-        main_layout.addWidget(viewer_group, stretch=1)
+        camera_layout.addWidget(viewer_group)
+        
+        main_layout.addWidget(camera_container, stretch=3)
+        
+        # Right side: Control panel
+        control_panel = self._create_control_panel()
+        control_panel.setMaximumWidth(350)
+        main_layout.addWidget(control_panel, stretch=1)
     
     def _create_control_panel(self) -> QWidget:
         """Create control panel."""
@@ -739,6 +754,7 @@ class MainWindow(QMainWindow):
         # Status label (will be updated after GPU detection)
         self.status_label = QLabel("Backend: Initializing...")
         self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("color: #aaa; font-size: 11px; padding: 5px;")
         layout.addWidget(self.status_label)
         
         return panel
