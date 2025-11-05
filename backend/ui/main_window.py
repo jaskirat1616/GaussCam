@@ -515,6 +515,7 @@ class MainWindow(QMainWindow):
         self.video_path: Optional[str] = None
         self.selected_webcam_id: int = 0
         self.performance_mode: str = "Balanced"
+        self.depth_model: str = "MiDaS Hybrid"  # Default depth model
         
         # GPU detection (defer to avoid Metal conflicts during PySide6 init)
         self.gpu_detector = None
@@ -614,6 +615,16 @@ class MainWindow(QMainWindow):
         self.performance_combo.setCurrentText("Balanced")
         self.performance_combo.currentTextChanged.connect(self._on_performance_changed)
         render_layout.addWidget(self.performance_combo)
+        
+        # Depth model settings
+        depth_label = QLabel("Depth Model:")
+        render_layout.addWidget(depth_label)
+        
+        self.depth_model_combo = QComboBox()
+        self.depth_model_combo.addItems(["MiDaS Hybrid", "MiDaS Large", "Depth Anything V2 Small", "Depth Anything V2 Base", "Depth Anything V2 Large"])
+        self.depth_model_combo.setCurrentText("MiDaS Hybrid")
+        self.depth_model_combo.currentTextChanged.connect(self._on_depth_model_changed)
+        render_layout.addWidget(self.depth_model_combo)
         
         self.gaussian_count_label = QLabel("Gaussians: 0")
         render_layout.addWidget(self.gaussian_count_label)
@@ -835,7 +846,16 @@ class MainWindow(QMainWindow):
     def _on_performance_changed(self, mode: str) -> None:
         """Handle performance mode change."""
         self.performance_mode = mode
-        print(f"Performance mode changed to: {mode}")
+        logger.info(f"Performance mode changed to: {mode}")
+        # Update processing thread parameters if running
+        if self.processing_thread is not None and self.processing_thread.is_running:
+            # Will apply on next frame
+            pass
+    
+    def _on_depth_model_changed(self, model: str) -> None:
+        """Handle depth model change."""
+        self.depth_model = model
+        logger.info(f"Depth model changed to: {model}")
         # Update processing thread parameters if running
         if self.processing_thread is not None and self.processing_thread.is_running:
             # Will apply on next frame

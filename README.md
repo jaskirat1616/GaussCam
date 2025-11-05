@@ -7,7 +7,7 @@ A Gaussian Splatting renderer supporting both CUDA (NVIDIA GPUs) and MPS (Apple 
 ### Core Capabilities
 - **Gaussian Splatting**: GPU-accelerated rendering with CUDA (NVIDIA) and MPS (Apple Silicon)
 - **Input Sources**: Webcam feed and offline video file support
-- **Depth Estimation**: MiDaS-large/hybrid model for depth estimation
+- **Depth Estimation**: MiDaS (Hybrid/Large) or Depth Anything V2 (Small/Base/Large) models
 - **Camera Tracking**: RAFT optical flow for frame-to-frame pose estimation
 - **Novel View Rendering**: Interactive camera control for arbitrary viewpoints
 - **Cross-Platform**: Windows (CUDA) and macOS (MPS) support

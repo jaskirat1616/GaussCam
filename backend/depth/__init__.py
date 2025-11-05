@@ -1,2 +1,2 @@
-"""Depth estimation using MiDaS."""
+"""Depth estimation using MiDaS and Depth Anything V2."""
 
