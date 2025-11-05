@@ -332,9 +332,21 @@ def list_webcam_devices(max_devices: int = 10) -> list:
         List of available device IDs
     """
     available = []
-    # Suppress OpenCV warnings
     import warnings
     import os
+    import sys
+    from contextlib import contextmanager
+    
+    @contextmanager
+    def suppress_stderr():
+        """Suppress stderr output temporarily."""
+        with open(os.devnull, 'w') as devnull:
+            old_stderr = sys.stderr
+            sys.stderr = devnull
+            try:
+                yield
+            finally:
+                sys.stderr = old_stderr
     
     # Temporarily suppress OpenCV errors
     old_env = os.environ.get('OPENCV_LOG_LEVEL', '')
@@ -343,13 +355,17 @@ def list_webcam_devices(max_devices: int = 10) -> list:
     try:
         for i in range(max_devices):
             try:
-                cap = cv2.VideoCapture(i, cv2.CAP_ANY)
-                if cap.isOpened():
-                    # Try to read a frame to verify it works
-                    ret, _ = cap.read()
-                    if ret:
-                        available.append(i)
-                cap.release()
+                # Suppress OpenCV warnings during enumeration
+                with suppress_stderr():
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        cap = cv2.VideoCapture(i, cv2.CAP_ANY)
+                        if cap.isOpened():
+                            # Try to read a frame to verify it works
+                            ret, _ = cap.read()
+                            if ret:
+                                available.append(i)
+                        cap.release()
             except Exception:
                 # Skip devices that fail to open
                 pass

@@ -86,6 +86,11 @@ class DepthAnythingV2Estimator:
         logger.info(f"Device: {self.device}")
         
         try:
+            # Models are automatically downloaded from HuggingFace on first use
+            # and cached locally for future use
+            logger.info(f"Downloading model from HuggingFace (first time only)...")
+            logger.info(f"Model will be cached locally after download")
+            
             self.pipeline = pipeline(
                 task="depth-estimation",
                 model=model_name,
@@ -94,6 +99,8 @@ class DepthAnythingV2Estimator:
             logger.info("Depth Anything V2 model loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load Depth Anything V2 via Transformers: {e}")
+            logger.error("This may be due to network issues or model availability.")
+            logger.error("Models are downloaded automatically from HuggingFace on first use.")
             raise
     
     def _load_direct(self) -> None:
