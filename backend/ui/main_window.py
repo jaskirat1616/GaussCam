@@ -1178,6 +1178,10 @@ class MainWindow(QMainWindow):
             
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
+            # Disable input controls during processing
+            self.input_combo.setEnabled(False)
+            self.video_button.setEnabled(False)
+            self.webcam_combo.setEnabled(False)
             self.processing_thread.start()
             
             logger.info(f"Started processing: {input_source}")
