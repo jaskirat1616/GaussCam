@@ -1221,8 +1221,10 @@ class MainWindow(QMainWindow):
                         # Update FPS
                         if self.progress_tracker is not None:
                             stats = self.progress_tracker.get_stats()
-                            if stats.fps > 0:
-                                self.fps_label.setText(f"FPS: {stats.fps:.1f}")
+                            # Handle both FrameStats object and dict
+                            fps = stats.fps if hasattr(stats, 'fps') else stats.get('fps', 0.0)
+                            if fps > 0:
+                                self.fps_label.setText(f"FPS: {fps:.1f}")
                     else:
                         self.gaussian_count_label.setText("Gaussians: 0")
         except Exception as e:

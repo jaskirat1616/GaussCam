@@ -123,11 +123,20 @@ class DepthAnythingV2Estimator:
                 else:
                     raise e1
         except Exception as e:
-            logger.error(f"Failed to load Depth Anything V2 via Transformers: {e}")
-            logger.error("This may be due to:")
-            logger.error("  - Network connectivity issues")
-            logger.error("  - Model not available on HuggingFace")
-            logger.error("  - HuggingFace authentication required")
+            error_msg = str(e)
+            logger.error(f"Failed to load Depth Anything V2 via Transformers: {error_msg}")
+            
+            # Check if it's a KeyError with 'depth_anything' - this might be a model config issue
+            if "'depth_anything'" in error_msg or "depth_anything" in error_msg.lower():
+                logger.error("This appears to be a model configuration issue.")
+                logger.error("The Depth Anything V2 models may not be available on HuggingFace.")
+                logger.error("Try using MiDaS models instead, or check HuggingFace model availability.")
+            else:
+                logger.error("This may be due to:")
+                logger.error("  - Network connectivity issues")
+                logger.error("  - Model not available on HuggingFace")
+                logger.error("  - HuggingFace authentication required")
+            
             logger.error("Models are downloaded automatically from HuggingFace on first use.")
             raise
     
