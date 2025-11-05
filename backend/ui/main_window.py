@@ -124,10 +124,10 @@ class ProcessingThread(QThread):
                 return
             
             # Frame preprocessor
-                preprocessor = FramePreprocessor(normalize=True, to_rgb=True)
-                self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=2)
-                self.async_capture.start()
-                logger.info(f"Async capture started for {self.input_source}")
+            preprocessor = FramePreprocessor(normalize=True, to_rgb=True)
+            self.async_capture = AsyncFrameCapture(self.capture, preprocessor, queue_size=2)
+            self.async_capture.start()
+            logger.info(f"Async capture started for {self.input_source}")
             
             # Depth estimator (use smaller model for speed)
             print("Loading MiDaS depth model...")
@@ -251,7 +251,7 @@ class ProcessingThread(QThread):
                     else:
                         display_frame = display_frame.astype(np.uint8)
                     self.frame_ready.emit(display_frame)
-                    print(f"Displayed initial frame: shape={display_frame.shape}")
+                    logger.debug(f"Displayed initial frame: shape={display_frame.shape}")
                 
                 # Estimate depth (skip frames for speed)
                 if frame_count % depth_skip_frames == 0 or last_depth is None:
@@ -444,7 +444,10 @@ class ProcessingThread(QThread):
                     target_size = optimal["target_size"]
                     target_pixels = optimal["target_pixels"]
                     voxel_size = optimal["voxel_size"]
-                    print(f"Adapted settings: FPS={adaptive_manager.get_current_fps():.1f}, max_gaussians={max_gaussians}")
+                    logger.info(
+                        f"Adapted settings: FPS={adaptive_manager.get_current_fps():.1f}, "
+                        f"max_gaussians={max_gaussians}"
+                    )
                 
                 # Small delay to prevent CPU spinning
                 # Less delay for video (no real-time requirement)
@@ -454,7 +457,7 @@ class ProcessingThread(QThread):
                     self.msleep(200)  # Delay for webcam to balance performance
         
         except KeyboardInterrupt:
-            print("Processing interrupted by user")
+            logger.warning("Processing interrupted by user")
             self.error_occurred.emit("Processing interrupted by user")
         except Exception as e:
             import traceback
