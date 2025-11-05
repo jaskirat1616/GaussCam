@@ -6,7 +6,11 @@ GPU-accelerated operations and performance optimizations.
 
 import numpy as np
 import torch
-from typing import Tuple, Optional
+from typing import Dict, Optional, Tuple
+
+from backend.gaussian.four_d import Gaussian4D, TemporalHierarchy
+from backend.gaussian.merger import TemporalGaussianMerger
+from backend.scene.temporal_graph import TemporalGraph
 from backend.utils.gpu_detection import get_device, is_cuda, is_mps
 
 
@@ -202,6 +206,7 @@ def get_adaptive_quality_settings(fps: float, target_fps: float = 15.0) -> dict:
         }
 
 
+
 def batch_process_gaussians(
     gaussians_list: list,
     batch_size: int = 32,
@@ -295,4 +300,83 @@ def batch_process_gaussians(
         batches.append(batch_dict)
 
     return batches
+
+
+def compute_adaptive_importance_scores(
+    residuals: np.ndarray,
+    visibility: np.ndarray,
+    temporal_stability: np.ndarray,
+    alpha: float = 0.5,
+    beta: float = 0.3,
+    gamma: float = 0.2,
+) -> np.ndarray:
+    """Compute multi-factor importance scores for pruning and refinement."""
+
+    residuals = np.asarray(residuals, dtype=np.float32)
+    visibility = np.asarray(visibility, dtype=np.float32)
+    temporal_stability = np.asarray(temporal_stability, dtype=np.float32)
+
+    scores = (
+        alpha * (1.0 - residuals) +
+        beta * visibility +
+        gamma * temporal_stability
+    )
+    return scores
+
+
+def dynamic_pixel_downsampling(current_pixels: int, gpu_utilization: float, threshold: float = 0.8) -> int:
+    """Adjust pixel sampling dynamically based on GPU utilization."""
+
+    if gpu_utilization < threshold:
+        return current_pixels
+    scale = min(0.9, threshold / max(gpu_utilization, 1e-5))
+    new_pixels = int(current_pixels * scale)
+    return max(new_pixels, int(current_pixels * 0.5))
+
+
+def optimize_gaussian4d(
+    gaussian4d: Gaussian4D,
+    temporal_graph: TemporalGraph,
+    hierarchy: TemporalHierarchy,
+    frame_psnr: float,
+    frame_ate: float,
+    target_counts: Optional[Dict[int, int]] = None,
+) -> Dict[str, float]:
+    """High-level optimization step for 4D Gaussians with temporal hierarchy."""
+
+    merger = TemporalGaussianMerger(hierarchy=hierarchy)
+
+    linked_nodes = [
+        node for node in temporal_graph.iter_nodes()
+        if node.gaussian_cluster is not None
+    ]
+
+    if not linked_nodes:
+        cluster = hierarchy.register_cluster(
+            gaussian=gaussian4d,
+            importance_score=frame_psnr - frame_ate * 10.0,
+            keyframe_time=float(np.mean(gaussian4d.timestamps)),
+        )
+        return {"cluster_id": float(cluster.cluster_id)}
+
+    cluster_id = linked_nodes[-1].gaussian_cluster
+    stats = merger.accumulate(
+        cluster_id=cluster_id,
+        new_gaussian=gaussian4d,
+        frame_psnr=frame_psnr,
+        frame_ate=frame_ate,
+        level=0,
+    )
+
+    if target_counts:
+        prune_stats = merger.prune(target_counts=target_counts)
+        stats.pruned_nodes += prune_stats.pruned_nodes
+
+    metrics = {
+        "spawned_children": float(stats.spawned_children),
+        "pruned_nodes": float(stats.pruned_nodes),
+        "average_residual": float(stats.average_residual),
+    }
+    return metrics
+
 
