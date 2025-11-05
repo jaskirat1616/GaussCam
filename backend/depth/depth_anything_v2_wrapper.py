@@ -74,12 +74,21 @@ class DepthAnythingV2Estimator:
             'large': 'depth-anything/Depth-Anything-V2-Large-hf',
         }
         
+        # Alternative model names if the above don't work
+        alt_model_map = {
+            'small': 'LiheYoung/Depth-Anything-V2-Small-hf',
+            'base': 'LiheYoung/Depth-Anything-V2-Base-hf',
+            'large': 'LiheYoung/Depth-Anything-V2-Large-hf',
+        }
+        
         if self.model_size not in model_map:
             raise ValueError(
                 f"Invalid model size: {self.model_size}. Must be 'small', 'base', or 'large'"
             )
         
-        model_name = model_map[self.model_size]
+        model_name = model_map.get(self.model_size)
+        if model_name is None:
+            raise ValueError(f"Invalid model size: {self.model_size}")
         
         logger.info(f"Loading Depth Anything V2 ({self.model_size}) via Transformers...")
         logger.info(f"Model: {model_name}")
@@ -91,15 +100,33 @@ class DepthAnythingV2Estimator:
             logger.info(f"Downloading model from HuggingFace (first time only)...")
             logger.info(f"Model will be cached locally after download")
             
-            self.pipeline = pipeline(
-                task="depth-estimation",
-                model=model_name,
-                device=0 if is_cuda() else -1 if is_mps() else -1,
-            )
-            logger.info("Depth Anything V2 model loaded successfully")
+            # Try primary model name first
+            try:
+                self.pipeline = pipeline(
+                    task="depth-estimation",
+                    model=model_name,
+                    device=0 if is_cuda() else -1 if is_mps() else -1,
+                )
+                logger.info("Depth Anything V2 model loaded successfully")
+            except Exception as e1:
+                # Try alternative model name if primary fails
+                logger.warning(f"Failed to load {model_name}, trying alternative name...")
+                alt_model_name = alt_model_map.get(self.model_size)
+                if alt_model_name:
+                    self.pipeline = pipeline(
+                        task="depth-estimation",
+                        model=alt_model_name,
+                        device=0 if is_cuda() else -1 if is_mps() else -1,
+                    )
+                    logger.info(f"Depth Anything V2 model loaded successfully (using alternative: {alt_model_name})")
+                else:
+                    raise e1
         except Exception as e:
             logger.error(f"Failed to load Depth Anything V2 via Transformers: {e}")
-            logger.error("This may be due to network issues or model availability.")
+            logger.error("This may be due to:")
+            logger.error("  - Network connectivity issues")
+            logger.error("  - Model not available on HuggingFace")
+            logger.error("  - HuggingFace authentication required")
             logger.error("Models are downloaded automatically from HuggingFace on first use.")
             raise
     
