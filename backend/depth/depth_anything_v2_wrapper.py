@@ -24,10 +24,6 @@ try:
 except ImportError:
     DEPTH_ANYTHING_V2_AVAILABLE = False
     DepthAnythingV2 = None
-    # Try to provide helpful error message
-    import sys
-    if 'depth_anything_v2' not in str(sys.path):
-        logger.warning("Depth Anything V2 not available. Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
 
 from backend.utils.gpu_detection import get_device, is_cuda, is_mps
 from backend.utils.logging_config import get_logger
@@ -41,29 +37,44 @@ class DepthAnythingV2Estimator:
     def __init__(
         self,
         model_size: str = "small",  # 'small', 'base', 'large'
-        use_transformers: bool = True,  # Use HuggingFace Transformers
+        use_transformers: bool = False,  # Prefer direct loading from repo
         device: Optional[torch.device] = None,
+        checkpoint_path: Optional[str] = None,  # Path to checkpoint file
     ):
         """
         Initialize Depth Anything V2 depth estimator.
         
         Args:
             model_size: Model size ('small', 'base', 'large')
-            use_transformers: Use HuggingFace Transformers (recommended)
+            use_transformers: Use HuggingFace Transformers (fallback if direct not available)
             device: PyTorch device (auto-detected if None)
+            checkpoint_path: Optional path to checkpoint file (if None, tries to download)
         """
         self.model_size = model_size.lower()
         self.use_transformers = use_transformers
         self.device = device or get_device()
+        self.checkpoint_path = checkpoint_path
         
         self.model = None
         self.pipeline = None
         self.depth_anything_model = None
         
-        if use_transformers:
+        # Try direct loading first (preferred), fallback to Transformers
+        if DEPTH_ANYTHING_V2_AVAILABLE and not use_transformers:
+            try:
+                self._load_direct()
+                logger.info(f"Loaded Depth Anything V2 ({model_size}) directly from repository")
+            except Exception as e:
+                logger.warning(f"Direct loading failed: {e}")
+                logger.info("Falling back to HuggingFace Transformers...")
+                if pipeline is not None:
+                    self._load_transformers()
+                else:
+                    raise ImportError("Neither direct loading nor Transformers available. Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
+        elif use_transformers or (pipeline is not None and not DEPTH_ANYTHING_V2_AVAILABLE):
             self._load_transformers()
         else:
-            self._load_direct()
+            raise ImportError("Depth Anything V2 not available. Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
     
     def _load_transformers(self) -> None:
         """Load model using HuggingFace Transformers."""
@@ -326,20 +337,27 @@ class DepthAnythingV2Estimator:
         return depth.astype(np.float32)
     
     def _predict_direct(self, image: np.ndarray) -> np.ndarray:
-        """Predict depth using direct model loading."""
+        """Predict depth using direct model from repository."""
         if self.depth_anything_model is None:
             raise RuntimeError("Model not loaded. Call _load_direct() first.")
         
-        # Use the model's infer_image method
-        depth = self.depth_anything_model.infer_image(image)
+        # Preprocess image (convert to RGB if needed)
+        # The model's infer_image expects BGR image from OpenCV
+        # But we've already converted to RGB in preprocess, so convert back
+        image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
+        # Use the model's infer_image method (as per repository usage)
+        with torch.no_grad():
+            depth = self.depth_anything_model.infer_image(image_bgr)
+        
+        # Depth is returned as numpy array (H, W)
         # Normalize to [0, 1]
         depth_min = depth.min()
         depth_max = depth.max()
         depth_range = depth_max - depth_min + 1e-8
         depth = (depth - depth_min) / depth_range
         
-        return depth
+        return depth.astype(np.float32)
     
     def estimate_depth(self, image: np.ndarray) -> np.ndarray:
         """
