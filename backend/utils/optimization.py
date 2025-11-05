@@ -1,5 +1,5 @@
 """
-Advanced Optimization Utilities
+Optimization Utilities
 
 GPU-accelerated operations and performance optimizations.
 """
@@ -151,7 +151,7 @@ def fast_depth_to_point_cloud_gpu(
     return points_valid, colors_valid
 
 
-def adaptive_quality_settings(fps: float, target_fps: float = 15.0) -> dict:
+def get_adaptive_quality_settings(fps: float, target_fps: float = 15.0) -> dict:
     """
     Adaptively adjust quality settings based on current FPS.
     

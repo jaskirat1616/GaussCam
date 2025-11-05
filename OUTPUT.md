@@ -66,20 +66,20 @@
 
 ### Advantages of GaussCam over NeuralRecon
 
-1. **Better Visual Quality**
+1. **Visual Quality**
    - **Photorealistic Gaussian Splatting** vs TSDF volumes (mesh-based)
-   - **2D Gaussian projection** for smooth, high-quality rendering
+   - **2D Gaussian projection** for smooth rendering
    - Better handling of fine details, textures, and edges
    - Superior novel view synthesis quality with smooth interpolation
    - No mesh artifacts or surface noise
 
-2. **More Flexible Representation**
+2. **Flexible Representation**
    - **Compact Gaussian representation** (~10-50 MB) vs dense TSDF volumes (~100+ MB)
    - Easier to edit and manipulate individual Gaussians
-   - Better for interactive applications and real-time editing
+   - Better for interactive applications
    - Supports progressive refinement and LOD
 
-3. **Real-time Rendering**
+3. **Rendering**
    - **GPU-accelerated rendering** (CUDA/MPS) with direct shader support
    - Interactive frame rates (15-30 FPS) without preprocessing
    - **No mesh extraction required** - direct Gaussian rendering
@@ -97,7 +97,7 @@
    - Interactive parameter adjustment
 
 6. **Novel View Synthesis**
-   - **Superior quality** novel views with smooth interpolation
+   - **Quality** novel views with smooth interpolation
    - Interactive camera control (rotation, translation, zoom)
    - Real-time viewpoint switching
    - Better temporal consistency
@@ -108,7 +108,7 @@
    - Frame-by-frame export
    - Multiple output formats support
 
-8. **Better Performance**
+8. **Performance**
    - **Memory efficient**: Compact Gaussian representation
    - **Faster processing**: No mesh extraction step
    - **Scalable**: Adjustable quality/performance tradeoff

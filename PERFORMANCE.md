@@ -15,12 +15,14 @@ GaussCam is optimized for real-time performance on both CUDA (NVIDIA) and MPS (A
 
 ### Current Optimizations
 
-1. **Frame Skipping**: Process every 3rd frame
-2. **Depth Skip**: Process depth every 5 frames
+1. **Frame Skipping**: Process every Nth frame
+2. **Depth Skip**: Process depth every N frames
 3. **Pre-downsampling**: Downsample depth maps before point cloud conversion
-4. **Aggressive Downsampling**: Voxel-based point cloud downsampling
+4. **Downsampling**: Voxel-based point cloud downsampling
 5. **Fast Rendering**: Point-based rendering for >5000 Gaussians
 6. **Uniform Fitting**: Faster Gaussian fitting method
+7. **GPU Acceleration**: GPU-accelerated point cloud operations
+8. **Adaptive Quality**: Automatic quality adjustment based on FPS
 
 ## Tuning Parameters
 

@@ -1,8 +1,8 @@
-# Advanced Optimization Guide
+# Optimization Guide
 
 ## Overview
 
-GaussCam includes advanced optimizations for maximum speed and accuracy, including GPU acceleration, adaptive quality management, and vectorized operations.
+GaussCam includes optimizations for speed and accuracy, including GPU acceleration, adaptive quality management, and vectorized operations.
 
 ## Performance Optimizations
 
@@ -93,7 +93,7 @@ GaussCam includes advanced optimizations for maximum speed and accuracy, includi
 - **Voxel Size**: 0.08
 - **Expected FPS**: 5-10
 
-## Advanced Features
+## Features
 
 ### 1. GPU-Accelerated Point Cloud Operations
 

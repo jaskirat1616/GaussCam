@@ -8,24 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- OUTPUT.md documentation with comprehensive output guide
+- OUTPUT.md documentation with output guide
 - Fast point-based rendering fallback for large Gaussian counts (>5000)
 - Export capabilities: Save/load Gaussians, export rendered videos
 - Pre-downsampling of depth maps for performance optimization
-- Frame skipping for real-time processing
+- Frame skipping for processing
 - Debug logging throughout processing pipeline
+- GPU-accelerated point cloud operations
+- Adaptive quality management with FPS monitoring
+- Webcam selection dropdown in UI
+- Performance mode selector (Fast/Balanced/Quality)
 
 ### Changed
 - Optimized rendering performance: reduced threshold from 10K to 5K Gaussians
 - Switched to uniform Gaussian fitting for better speed
-- Reduced max Gaussians from 30K to 10K for real-time performance
+- Reduced max Gaussians from 30K to 10K for performance
 - Increased depth skip frames from 3 to 5
 - More aggressive point cloud downsampling (voxel size 0.08)
+- Depth estimation uses torch.compile for faster inference
+- Vectorized rendering operations
 
 ### Fixed
 - Fixed shape mismatch in MPS renderer 2D Gaussian projection
 - Fixed rendering hanging on large Gaussian counts
 - Improved error handling and tracebacks
+- Fixed processing finishing early after few frames
 
 ## [0.1.0] - 2024-11-04
 

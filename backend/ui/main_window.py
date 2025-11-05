@@ -142,6 +142,10 @@ class ProcessingThread(QThread):
             from backend.utils.adaptive_quality import AdaptiveQualityManager
             adaptive_manager = AdaptiveQualityManager(target_fps=15.0)
             
+            # Track consecutive None frames to prevent early exit
+            consecutive_none_frames = 0
+            max_none_frames = 10  # Allow up to 10 consecutive None frames before checking
+            
             # Adjust parameters based on performance mode
             if performance_mode == "Fast":
                 depth_skip_frames = 15
@@ -174,11 +178,18 @@ class ProcessingThread(QThread):
                 if frame is None:
                     if self.input_source == "video":
                         # End of video
+                        print("Video ended")
                         break
-                    self.msleep(10)
+                    # For webcam, keep trying - don't exit immediately
+                    consecutive_none_frames += 1
+                    if consecutive_none_frames > max_none_frames:
+                        print(f"Warning: {consecutive_none_frames} consecutive None frames, continuing...")
+                        consecutive_none_frames = 0  # Reset counter
+                    self.msleep(100)
                     continue
                 
-                print(f"Frame {frame_count} read: shape={frame.shape if hasattr(frame, 'shape') else 'unknown'}")
+                # Reset counter when we get a valid frame
+                consecutive_none_frames = 0
                 
                 # Skip frames for performance - only process every Nth frame
                 if frame_count % (frame_skip + 1) != 0:
@@ -188,6 +199,8 @@ class ProcessingThread(QThread):
                     frame_count += 1
                     self.msleep(33)  # ~30 FPS display rate
                     continue
+                
+                print(f"Processing frame {frame_count}: shape={frame.shape if hasattr(frame, 'shape') else 'unknown'}")
                 
                 # Convert to numpy if needed
                 import torch
@@ -297,7 +310,7 @@ class ProcessingThread(QThread):
                         print(f"Fitting Gaussians from {len(points)} points...")
                         # Use performance mode setting with GPU acceleration
                         gaussians = self.gaussian_fitter.fit_downsampled(
-                            points, colors, max_gaussians=max_gaussians, method="uniform", use_gpu=True  # GPU-accelerated
+                            points, colors, max_gaussians=max_gaussians, method="uniform", use_gpu=True
                         )
                         print(f"Fitted {gaussians.num_gaussians} Gaussians")
                         
@@ -323,10 +336,16 @@ class ProcessingThread(QThread):
                                 print(f"Rendering error: {e}")
                                 import traceback
                                 traceback.print_exc()
+                                # Don't exit on rendering error - continue processing
+                                if last_rendered is not None:
+                                    self.frame_ready.emit(last_rendered)
                     except Exception as e:
                         print(f"Gaussian fitting/merging error: {e}")
                         import traceback
                         traceback.print_exc()
+                        # Don't exit on fitting error - continue processing
+                        if last_rendered is not None:
+                            self.frame_ready.emit(last_rendered)
                 else:
                     # Emit cached frame or last rendered frame if no points
                     if last_rendered is not None:
@@ -360,17 +379,29 @@ class ProcessingThread(QThread):
                 # Small delay to prevent CPU spinning
                 self.msleep(200)  # Increased delay for better performance balance
         
+        except KeyboardInterrupt:
+            print("Processing interrupted by user")
+            self.error_occurred.emit("Processing interrupted by user")
         except Exception as e:
             import traceback
             error_msg = f"Processing error: {str(e)}\n{traceback.format_exc()}"
+            print(error_msg)
             self.error_occurred.emit(error_msg)
         finally:
             # Cleanup
+            print("Cleaning up processing thread...")
             if self.async_capture is not None:
-                self.async_capture.stop()
+                try:
+                    self.async_capture.stop()
+                except:
+                    pass
             if self.capture is not None:
-                self.capture.release()
+                try:
+                    self.capture.release()
+                except:
+                    pass
             self.is_running = False
+            print("Processing thread finished")
     
     def stop(self) -> None:
         """Stop processing thread."""

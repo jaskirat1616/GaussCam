@@ -1,7 +1,7 @@
 """
 Adaptive Quality Management
 
-Dynamically adjusts quality settings based on performance metrics.
+Dynamically adjusts quality settings based on performance.
 """
 
 import time
@@ -10,7 +10,7 @@ from collections import deque
 
 
 class AdaptiveQualityManager:
-    """Manages adaptive quality settings based on performance."""
+    """Manages quality settings based on performance."""
     
     def __init__(
         self,
@@ -69,7 +69,7 @@ class AdaptiveQualityManager:
         current_fps = self.get_current_fps()
         
         if current_fps < self.min_fps:
-            # Too slow - reduce quality aggressively
+            # Too slow - reduce quality
             return {
                 "depth_skip_frames": 20,
                 "frame_skip": 10,
@@ -91,7 +91,7 @@ class AdaptiveQualityManager:
                 "interpolation": "linear",
             }
         elif current_fps > self.max_fps:
-            # Fast enough - can increase quality
+            # Fast - can increase quality
             return {
                 "depth_skip_frames": 5,
                 "frame_skip": 2,

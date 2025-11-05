@@ -1,6 +1,6 @@
 # GaussCam
 
-A high-quality Gaussian Splatting renderer supporting both CUDA (NVIDIA GPUs) and MPS (Apple Silicon). Features webcam input, offline video processing, depth estimation, novel view rendering, and export capabilities. **Better than NeuralRecon** with photorealistic rendering, cross-platform support, and easier setup.
+A Gaussian Splatting renderer supporting both CUDA (NVIDIA GPUs) and MPS (Apple Silicon). Features webcam input, offline video processing, depth estimation, novel view rendering, and export capabilities. Better than NeuralRecon with photorealistic rendering, cross-platform support, and easier setup.
 
 ## Features
 
@@ -12,25 +12,25 @@ A high-quality Gaussian Splatting renderer supporting both CUDA (NVIDIA GPUs) an
 - **Novel View Rendering**: Interactive camera control for arbitrary viewpoints
 - **Cross-Platform**: Windows (CUDA) and macOS (MPS) support
 
-### Advanced Features
+### Additional Features
 - **Temporal Merging**: Gaussian accumulation across frames for scene coherence
 - **Level of Detail (LOD)**: Progressive rendering with adjustable quality
 - **Export Capabilities**: Save/load Gaussians, export rendered videos
-- **Real-time Performance**: 15-30 FPS on mid-range GPUs
+- **Performance**: 15-30 FPS on mid-range GPUs
 - **Interactive Controls**: Novel view rotation, zoom, LOD adjustment
 - **Memory Efficient**: GPU memory pooling and efficient data structures
 
 ### Advantages over NeuralRecon
-- **Better Visual Quality**: Photorealistic Gaussian Splatting vs TSDF volumes
-- **Real-time Rendering**: No mesh extraction required, direct GPU rendering
-- **More Flexible**: Easier to edit and manipulate Gaussians
+- **Visual Quality**: Photorealistic Gaussian Splatting vs TSDF volumes
+- **Rendering**: No mesh extraction required, direct GPU rendering
+- **Flexible**: Easier to edit and manipulate Gaussians
 - **Cross-Platform**: Windows + macOS support vs Linux-only
-- **Easier Setup**: Simple installation, no training required
-- **GUI Application**: User-friendly desktop interface
-- **Better Novel Views**: Superior novel view synthesis quality
+- **Setup**: Simple installation, no training required
+- **GUI Application**: Desktop interface
+- **Novel Views**: Superior novel view synthesis quality
 - **Export Options**: Save/load Gaussians, export videos, multiple formats
 - **Temporal Consistency**: Better frame-to-frame coherence
-- **Interactive Controls**: Real-time parameter adjustment
+- **Interactive Controls**: Parameter adjustment
 - **Memory Efficient**: Compact Gaussian representation vs dense TSDF volumes
 
 ## Requirements
