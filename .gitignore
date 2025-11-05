@@ -19,7 +19,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
 # Virtual environments
 venv/
@@ -33,43 +32,44 @@ ENV/
 *.swp
 *.swo
 *~
-.DS_Store
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# PyTorch models
-*.pth
-*.pt
-*.ckpt
-*.pkl
-
-# Video files
-*.mp4
-*.avi
-*.mov
-*.mkv
-
-# Depth maps
-*.npy
-*.exr
-*.hdr
 
 # Logs
-*.log
 logs/
+*.log
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
+# Configuration
+config.json
+config.yaml
+
+# Data files
+*.pkl
+*.pickle
+*.h5
+*.hdf5
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Project specific
-gaussians/
-outputs/
-checkpoints/
+# Temporary files
+*.tmp
+*.temp
+*.cache
 
+# Model files (large)
+*.onnx
+*.pt
+*.pth
+*.ckpt
+models/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
