@@ -87,17 +87,71 @@ class DepthAnythingV2Estimator:
             except Exception as e:
                 logger.warning(f"Direct loading failed: {e}", exc_info=True)
                 logger.info("Falling back to HuggingFace Transformers...")
-                if pipeline is not None:
-                    self.use_transformers = True  # Switch to Transformers mode
-                    self._load_transformers()
+                
+                # Check if transformers version is compatible before trying
+                if TRANSFORMERS_AVAILABLE and TRANSFORMERS_VERSION_OK:
+                    if pipeline is not None:
+                        self.use_transformers = True  # Switch to Transformers mode
+                        self._load_transformers()
+                    else:
+                        raise ImportError(
+                            f"Neither direct loading nor Transformers available. "
+                            f"Direct loading error: {e}. "
+                            f"Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
+                        )
                 else:
-                    raise ImportError(
-                        f"Neither direct loading nor Transformers available. "
-                        f"Direct loading error: {e}. "
-                        f"Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
-                    )
-        elif use_transformers or (pipeline is not None and not DEPTH_ANYTHING_V2_AVAILABLE):
+                    # Transformers version too old or not available
+                    if TRANSFORMERS_AVAILABLE and not TRANSFORMERS_VERSION_OK:
+                        logger.error(f"Transformers version {transformers_version} is too old for Depth Anything V2")
+                        logger.error("Depth Anything V2 requires transformers >= 4.40.0")
+                        logger.error("")
+                        logger.error("Please update transformers:")
+                        logger.error("  pip install --upgrade transformers")
+                        logger.error("  or")
+                        logger.error("  pip install git+https://github.com/huggingface/transformers.git")
+                        logger.error("")
+                        logger.error("Or install Depth Anything V2 directly from repository:")
+                        logger.error("  pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
+                        raise ImportError(
+                            f"Transformers version too old for Depth Anything V2. "
+                            f"Current version: {transformers_version}, Required: >= 4.40.0. "
+                            f"Update with: pip install --upgrade transformers"
+                        )
+                    else:
+                        raise ImportError(
+                            f"Neither direct loading nor Transformers available. "
+                            f"Direct loading error: {e}. "
+                            f"Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
+                        )
+        elif use_transformers:
+            # Check version before attempting Transformers loading
+            if TRANSFORMERS_AVAILABLE and not TRANSFORMERS_VERSION_OK:
+                logger.error(f"Transformers version {transformers_version} is too old for Depth Anything V2")
+                logger.error("Depth Anything V2 requires transformers >= 4.40.0")
+                logger.error("")
+                logger.error("Please update transformers:")
+                logger.error("  pip install --upgrade transformers")
+                logger.error("  or")
+                logger.error("  pip install git+https://github.com/huggingface/transformers.git")
+                logger.error("")
+                logger.error("Or install Depth Anything V2 directly from repository:")
+                logger.error("  pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
+                raise ImportError(
+                    f"Transformers version too old for Depth Anything V2. "
+                    f"Current version: {transformers_version}, Required: >= 4.40.0. "
+                    f"Update with: pip install --upgrade transformers"
+                )
             self._load_transformers()
+        elif pipeline is not None and not DEPTH_ANYTHING_V2_AVAILABLE:
+            # Only try Transformers if version is OK
+            if TRANSFORMERS_VERSION_OK:
+                self._load_transformers()
+            else:
+                raise ImportError(
+                    f"Transformers version too old for Depth Anything V2. "
+                    f"Current version: {transformers_version}, Required: >= 4.40.0. "
+                    f"Update with: pip install --upgrade transformers"
+                )
         else:
             raise ImportError("Depth Anything V2 not available. Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
     
