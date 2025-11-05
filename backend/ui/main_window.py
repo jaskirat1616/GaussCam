@@ -20,10 +20,12 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QMessageBox,
+    QProgressBar,
+    QStatusBar,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QAction, QKeySequence
-from typing import Optional
+from typing import Optional, Dict, Any
 import sys
 import time
 
@@ -32,6 +34,17 @@ from backend.utils.gpu_detection import get_gpu_detector, is_cuda, is_mps
 from backend.renderer.base import Renderer
 from backend.renderer.cuda_renderer import CUDARenderer
 from backend.renderer.mps_renderer import MPSRenderer
+from backend.utils.logging_config import get_logger
+from backend.utils.validation import (
+    validate_video_file,
+    validate_webcam_device,
+    validate_performance_mode,
+    ValidationError,
+)
+from backend.utils.progress import FrameProgressTracker
+from backend.utils.config import get_config
+
+logger = get_logger(__name__)
 
 
 class ProcessingThread(QThread):
@@ -798,84 +811,165 @@ class MainWindow(QMainWindow):
     
     def _on_start_clicked(self) -> None:
         """Handle start button click."""
-        # Initialize renderer if not already done
-        if self.renderer is None:
-            self._setup_renderer()
-        
-        if self.renderer is None:
-            QMessageBox.warning(
-                self,
-                "No Renderer",
-                "Failed to initialize renderer. Cannot start processing.",
-            )
-            return
-        
-        # Get input source
-        input_source = self.input_combo.currentText().lower()
-        if input_source == "video file":
-            input_source = "video"
-            if not self.video_path:
+        try:
+            # Initialize renderer if not already done
+            if self.renderer is None:
+                logger.info("Initializing renderer...")
+                self._setup_renderer()
+            
+            if self.renderer is None:
+                error_msg = "Failed to initialize renderer. Cannot start processing."
+                logger.error(error_msg)
                 QMessageBox.warning(
                     self,
-                    "No Video File",
-                    "Please select a video file first.",
+                    "No Renderer",
+                    error_msg,
                 )
                 return
-        elif input_source == "webcam":
-            input_source = "webcam"
-        else:
-            QMessageBox.warning(
-                self,
-                "Invalid Input",
-                "Please select an input source (Webcam or Video File).",
+            
+            # Get input source
+            input_source = self.input_combo.currentText().lower()
+            if input_source == "video file":
+                input_source = "video"
+                if not self.video_path:
+                    error_msg = "Please select a video file first."
+                    logger.warning(error_msg)
+                    QMessageBox.warning(
+                        self,
+                        "No Video File",
+                        error_msg,
+                    )
+                    return
+                
+                # Validate video file
+                try:
+                    validate_video_file(self.video_path)
+                    logger.info(f"Validated video file: {self.video_path}")
+                except ValidationError as e:
+                    logger.error(f"Video file validation failed: {e}")
+                    QMessageBox.critical(
+                        self,
+                        "Invalid Video File",
+                        f"Invalid video file:\n{str(e)}",
+                    )
+                    return
+            elif input_source == "webcam":
+                input_source = "webcam"
+                # Validate webcam device
+                try:
+                    validate_webcam_device(self.selected_webcam_id)
+                    logger.info(f"Validated webcam device: {self.selected_webcam_id}")
+                except ValidationError as e:
+                    logger.error(f"Webcam validation failed: {e}")
+                    QMessageBox.critical(
+                        self,
+                        "Invalid Webcam",
+                        f"Invalid webcam device:\n{str(e)}",
+                    )
+                    return
+            else:
+                error_msg = "Please select an input source (Webcam or Video File)."
+                logger.warning(error_msg)
+                QMessageBox.warning(
+                    self,
+                    "Invalid Input",
+                    error_msg,
+                )
+                return
+            
+            # Validate performance mode
+            try:
+                performance_mode = validate_performance_mode(self.performance_mode)
+                logger.info(f"Using performance mode: {performance_mode}")
+            except ValidationError as e:
+                logger.warning(f"Invalid performance mode, using default: {e}")
+                performance_mode = "Balanced"
+            
+            # Stop existing thread if running
+            if self.processing_thread is not None and self.processing_thread.isRunning():
+                logger.info("Stopping existing processing thread...")
+                self.processing_thread.stop()
+            
+            # Initialize progress tracker for video
+            if input_source == "video":
+                try:
+                    import cv2
+                    cap = cv2.VideoCapture(self.video_path)
+                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap.release()
+                    self.progress_tracker = FrameProgressTracker(total_frames=total_frames)
+                    logger.info(f"Video has {total_frames} frames")
+                except Exception as e:
+                    logger.warning(f"Could not determine video frame count: {e}")
+                    self.progress_tracker = FrameProgressTracker(total_frames=None)
+            else:
+                self.progress_tracker = FrameProgressTracker(total_frames=None)
+            
+            # Create and start processing thread
+            logger.info(f"Creating processing thread for {input_source}...")
+            self.processing_thread = ProcessingThread(
+                input_source=input_source,
+                video_path=self.video_path if input_source == "video" else None,
+                renderer=self.renderer,
+                webcam_device_id=self.selected_webcam_id,
+                parent=self,
             )
-            return
-        
-        # Stop existing thread if running
-        if self.processing_thread is not None and self.processing_thread.isRunning():
-            self.processing_thread.stop()
-        
-        # Create and start processing thread
-        self.processing_thread = ProcessingThread(
-            input_source=input_source,
-            video_path=self.video_path if input_source == "video" else None,
-            renderer=self.renderer,
-            webcam_device_id=self.selected_webcam_id,
-            parent=self,
-        )
-        self.processing_thread.frame_ready.connect(self._on_frame_ready)
-        self.processing_thread.error_occurred.connect(self._on_processing_error)
-        self.processing_thread.finished.connect(self._on_processing_finished)
-        
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.processing_thread.start()
-        
-        print(f"Started processing: {input_source}")
+            self.processing_thread.frame_ready.connect(self._on_frame_ready)
+            self.processing_thread.error_occurred.connect(self._on_processing_error)
+            self.processing_thread.finished.connect(self._on_processing_finished)
+            
+            self.start_button.setEnabled(False)
+            self.stop_button.setEnabled(True)
+            self.processing_thread.start()
+            
+            logger.info(f"Started processing: {input_source}")
+            self._update_status(f"Processing: {input_source}")
+        except Exception as e:
+            logger.error(f"Error starting processing: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Start Error",
+                f"Failed to start processing:\n{str(e)}",
+            )
     
     def _on_stop_clicked(self) -> None:
         """Handle stop button click."""
+        logger.info("Stopping processing...")
         if self.processing_thread is not None and self.processing_thread.isRunning():
             self.processing_thread.stop()
         
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
-        print("Stopped processing")
+        self.progress_bar.setVisible(False)
+        self._update_status("Stopped")
+        logger.info("Processing stopped")
     
     def _on_frame_ready(self, frame: np.ndarray) -> None:
         """Handle frame ready signal from processing thread."""
-        if self.render_widget is not None:
-            self.render_widget.set_frame(frame)
-        
-        # Update Gaussian count
-        if hasattr(self, 'gaussian_count_label') and self.processing_thread is not None:
-            if hasattr(self.processing_thread, 'gaussian_merger') and \
-               self.processing_thread.gaussian_merger is not None:
-                gaussians = self.processing_thread.gaussian_merger.accumulated_gaussians
-                if gaussians is not None:
-                    self.gaussian_count_label.setText(f"Gaussians: {gaussians.num_gaussians}")
-                else:
-                    self.gaussian_count_label.setText("Gaussians: 0")
+        try:
+            if self.render_widget is not None:
+                self.render_widget.set_frame(frame)
+            
+            # Update Gaussian count
+            if hasattr(self, 'gaussian_count_label') and self.processing_thread is not None:
+                if hasattr(self.processing_thread, 'gaussian_merger') and \
+                   self.processing_thread.gaussian_merger is not None:
+                    gaussians = self.processing_thread.gaussian_merger.accumulated_gaussians
+                    if gaussians is not None:
+                        count = gaussians.num_gaussians
+                        self.gaussian_count_label.setText(f"Gaussians: {count}")
+                        
+                        # Update progress if available
+                        if self.progress_tracker is not None:
+                            self.progress_tracker.update_frame(processed=True)
+                            self._update_progress(
+                                self.progress_tracker.current,
+                                self.progress_tracker.total
+                            )
+                    else:
+                        self.gaussian_count_label.setText("Gaussians: 0")
+        except Exception as e:
+            logger.error(f"Error handling frame ready: {e}", exc_info=True)
     
     def _on_processing_error(self, error_msg: str) -> None:
         """Handle processing error."""
@@ -1104,6 +1198,34 @@ class MainWindow(QMainWindow):
             "Supports CUDA (NVIDIA) and MPS (Apple Silicon)",
         )
     
+    def _update_status(self, message: str, timeout: int = 0) -> None:
+        """
+        Update status bar message.
+        
+        Args:
+            message: Status message
+            timeout: Message timeout in milliseconds (0 = permanent)
+        """
+        self.statusBar.showMessage(message, timeout)
+        logger.debug(f"Status: {message}")
+    
+    def _update_progress(self, current: int, total: Optional[int] = None) -> None:
+        """
+        Update progress bar.
+        
+        Args:
+            current: Current progress value
+            total: Total progress value (None for indefinite)
+        """
+        if total is None:
+            self.progress_bar.setRange(0, 0)  # Indeterminate
+            self.progress_bar.setValue(0)
+        else:
+            self.progress_bar.setRange(0, total)
+            self.progress_bar.setValue(current)
+        
+        self.progress_bar.setVisible(True)
+    
     def closeEvent(self, event) -> None:
         """Handle window close event."""
         if self.processing_thread is not None:
@@ -1117,10 +1239,20 @@ def main():
     """Main entry point."""
     from PySide6.QtWidgets import QApplication
     
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+    try:
+        logger.info("Starting GaussCam application...")
+        app = QApplication(sys.argv)
+        app.setApplicationName("GaussCam")
+        app.setApplicationVersion("0.1.0")
+        
+        window = MainWindow()
+        window.show()
+        
+        logger.info("GaussCam application started successfully")
+        sys.exit(app.exec())
+    except Exception as e:
+        logger.critical(f"Fatal error in main: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
