@@ -214,6 +214,7 @@ class ProcessingThread(QThread):
                 
                 # Estimate depth (skip frames for speed)
                 if frame_count % depth_skip_frames == 0 or last_depth is None:
+                    depth_start_time = time.time()
                     print(f"Estimating depth for frame {frame_count}...")
                     try:
                         # Always resize for faster depth estimation
