@@ -59,6 +59,7 @@ class ProcessingThread(QThread):
         video_path: Optional[str] = None,
         renderer=None,
         webcam_device_id: int = 0,
+        depth_model: str = "MiDaS Hybrid",
         parent=None,
     ):
         """
@@ -69,6 +70,7 @@ class ProcessingThread(QThread):
             video_path: Path to video file (if input_source is 'video')
             renderer: Renderer instance
             webcam_device_id: Webcam device ID (default: 0)
+            depth_model: Depth model to use (default: "MiDaS Hybrid")
             parent: Parent widget
         """
         super().__init__(parent)
