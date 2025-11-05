@@ -24,6 +24,10 @@ try:
 except ImportError:
     DEPTH_ANYTHING_V2_AVAILABLE = False
     DepthAnythingV2 = None
+    # Try to provide helpful error message
+    import sys
+    if 'depth_anything_v2' not in str(sys.path):
+        logger.warning("Depth Anything V2 not available. Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git")
 
 from backend.utils.gpu_detection import get_device, is_cuda, is_mps
 from backend.utils.logging_config import get_logger
@@ -336,6 +340,18 @@ class DepthAnythingV2Estimator:
         depth = (depth - depth_min) / depth_range
         
         return depth
+    
+    def estimate_depth(self, image: np.ndarray) -> np.ndarray:
+        """
+        Estimate depth from image.
+        
+        Args:
+            image: RGB image as numpy array (H, W, 3)
+        
+        Returns:
+            Depth map as numpy array (H, W) normalized to [0, 1]
+        """
+        return self.predict(image)
     
     def predict(self, image: np.ndarray) -> np.ndarray:
         """

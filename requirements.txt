@@ -15,8 +15,9 @@ gsplat>=0.1.0
 # Depth estimation
 transformers>=4.30.0
 timm>=0.9.0
-# Depth Anything V2 (optional - will use Transformers by default)
-# For direct loading: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git
+# Depth Anything V2 (direct from repository - preferred)
+# Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git
+# Falls back to HuggingFace Transformers if not available
 
 # ONNX Runtime (optional, for faster depth inference)
 onnxruntime>=1.15.0
