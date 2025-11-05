@@ -283,11 +283,23 @@ class DepthAnythingV2Estimator:
             raise
     
     def _load_direct(self) -> None:
-        """Load model directly from repository (requires depth_anything_v2 package)."""
+        """
+        Load model directly from repository (requires depth_anything_v2 package).
+        
+        Following official repository: https://github.com/DepthAnything/Depth-Anything-V2
+        Installation:
+        git clone https://github.com/DepthAnything/Depth-Anything-V2
+        cd Depth-Anything-V2
+        pip install -r requirements.txt
+        """
         if not DEPTH_ANYTHING_V2_AVAILABLE:
             raise ImportError(
                 "depth_anything_v2 package not available. "
-                "Install with: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
+                "Install following official repository: https://github.com/DepthAnything/Depth-Anything-V2\n"
+                "  git clone https://github.com/DepthAnything/Depth-Anything-V2\n"
+                "  cd Depth-Anything-V2\n"
+                "  pip install -r requirements.txt\n"
+                "Or install directly: pip install git+https://github.com/DepthAnything/Depth-Anything-V2.git"
             )
         
         # Model configurations from the repository (as per README)
