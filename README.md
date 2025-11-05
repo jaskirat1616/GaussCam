@@ -27,7 +27,7 @@ A Gaussian Splatting renderer supporting both CUDA (NVIDIA GPUs) and MPS (Apple 
 - **Cross-Platform**: Windows + macOS support vs Linux-only
 - **Setup**: Simple installation, no training required
 - **GUI Application**: Desktop interface
-- **Novel Views**: Superior novel view synthesis quality
+- **Novel Views**: Novel view synthesis quality
 - **Export Options**: Save/load Gaussians, export videos, multiple formats
 - **Temporal Consistency**: Better frame-to-frame coherence
 - **Interactive Controls**: Parameter adjustment
@@ -198,9 +198,9 @@ pytest backend/tests/
 black backend/
 ```
 
-## Production Features
+## Features
 
-GaussCam includes production-ready features:
+GaussCam includes:
 
 - **Logging**: Structured logging with file rotation (`logs/gausscam.log`)
 - **Configuration**: Centralized configuration management (`config.json`)

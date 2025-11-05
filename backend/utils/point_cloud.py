@@ -124,7 +124,7 @@ def downsample_point_cloud(
         voxel_indices, axis=0, return_inverse=True
     )
     
-    # Vectorized averaging using numpy advanced indexing
+    # Vectorized averaging using numpy indexing
     num_voxels = len(unique_voxels)
     downsampled_points = np.zeros((num_voxels, 3), dtype=np.float32)
     downsampled_colors = np.zeros((num_voxels, 3), dtype=np.float32)

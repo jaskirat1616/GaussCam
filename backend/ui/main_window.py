@@ -265,16 +265,16 @@ class ProcessingThread(QThread):
                             scale = min(target_size / h, target_size / w)
                             small_h, small_w = max(1, int(h * scale)), max(1, int(w * scale))
                             small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-                            # Use enhanced post-processing for better accuracy
+                            # Use improved post-processing for better accuracy
                             depth = self.depth_estimator.estimate_depth(
-                                small_frame, postprocess=True, postprocess_method="enhanced"
+                                small_frame, postprocess=True, postprocess_method="improved"
                             )
                             # Resize depth back to original size (use linear for speed)
                             depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_LINEAR)
                         else:
-                            # Use enhanced post-processing for better accuracy
+                            # Use improved post-processing for better accuracy
                             depth = self.depth_estimator.estimate_depth(
-                                frame, postprocess=True, postprocess_method="enhanced"
+                                frame, postprocess=True, postprocess_method="improved"
                             )
                         last_depth = depth
                         depth_time = time.time() - depth_start_time

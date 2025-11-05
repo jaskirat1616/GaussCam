@@ -1,10 +1,10 @@
-# Production Readiness Guide
+# Features Guide
 
 ## Overview
 
-GaussCam has been enhanced with production-ready features including logging, configuration management, input validation, progress tracking, and error handling.
+GaussCam includes logging, configuration management, input validation, progress tracking, and error handling.
 
-## Production Features
+## Features
 
 ### 1. Logging System
 

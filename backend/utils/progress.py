@@ -1,7 +1,7 @@
 """
 Progress Tracking
 
-Professional progress tracking for long-running operations.
+Progress tracking for long-running operations.
 """
 
 import time

@@ -70,7 +70,7 @@
    - **Photorealistic Gaussian Splatting** vs TSDF volumes (mesh-based)
    - **2D Gaussian projection** for smooth rendering
    - Better handling of fine details, textures, and edges
-   - Superior novel view synthesis quality with smooth interpolation
+   - Novel view synthesis quality with smooth interpolation
    - No mesh artifacts or surface noise
 
 2. **Flexible Representation**
@@ -127,7 +127,7 @@
 | **Setup** | Simple | Complex |
 | **GUI** | Yes | No |
 
-## Advanced Features
+## Additional Features
 
 ### 1. Temporal Consistency
 - Gaussian merging across frames

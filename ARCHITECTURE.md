@@ -2,7 +2,7 @@
 
 ## Overview
 
-GaussCam is built with a modular, production-ready architecture following best practices for maintainability, scalability, and reliability.
+GaussCam uses a modular architecture for maintainability, scalability, and reliability.
 
 ## Architecture Principles
 
@@ -31,7 +31,7 @@ backend/
 
 ### 1. Logging (`backend/utils/logging_config.py`)
 
-**Purpose**: Professional logging with file rotation
+**Purpose**: Logging with file rotation
 
 **Features**:
 - Structured logging with timestamps

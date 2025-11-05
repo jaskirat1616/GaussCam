@@ -1,7 +1,7 @@
 """
 Logging Configuration
 
-Professional logging setup with file rotation and structured output.
+Logging setup with file rotation and structured output.
 """
 
 import logging
@@ -18,7 +18,7 @@ def setup_logging(
     enable_console_logging: bool = True,
 ) -> logging.Logger:
     """
-    Setup professional logging configuration.
+    Setup logging configuration.
     
     Args:
         log_dir: Directory for log files (default: logs/ in project root)
