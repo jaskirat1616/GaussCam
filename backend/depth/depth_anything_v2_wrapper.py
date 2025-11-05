@@ -13,14 +13,28 @@ from pathlib import Path
 
 try:
     from transformers import pipeline, AutoImageProcessor, AutoModelForDepthEstimation
+    from transformers import __version__ as transformers_version
     from PIL import Image
     TRANSFORMERS_AVAILABLE = True
+    
+    # Check if transformers version supports depth_anything architecture
+    # Depth Anything V2 support was added in transformers 4.40.0+
+    try:
+        version_parts = transformers_version.split('.')
+        major = int(version_parts[0])
+        minor = int(version_parts[1]) if len(version_parts) > 1 else 0
+        TRANSFORMERS_VERSION_OK = (major > 4) or (major == 4 and minor >= 40)
+    except (ValueError, IndexError):
+        # If version parsing fails, assume it might be OK (could be dev version)
+        TRANSFORMERS_VERSION_OK = True
 except ImportError:
     pipeline = None
     AutoImageProcessor = None
     AutoModelForDepthEstimation = None
     Image = None
+    transformers_version = None
     TRANSFORMERS_AVAILABLE = False
+    TRANSFORMERS_VERSION_OK = False
 
 try:
     from depth_anything_v2.dpt import DepthAnythingV2
@@ -94,6 +108,16 @@ class DepthAnythingV2Estimator:
                 "transformers and Pillow required. Install with: pip install transformers pillow"
             )
         
+        # Check transformers version for depth_anything support
+        if not TRANSFORMERS_VERSION_OK:
+            logger.warning(f"Current transformers version: {transformers_version}")
+            logger.warning("Depth Anything V2 requires transformers >= 4.40.0")
+            logger.warning("Please update transformers:")
+            logger.warning("  pip install --upgrade transformers")
+            logger.warning("  or")
+            logger.warning("  pip install git+https://github.com/huggingface/transformers.git")
+            logger.warning("Attempting to load anyway (may fail)...")
+        
         # Use official depth-anything organization models from HuggingFace
         # According to https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
         # These are the official Transformers-compatible models
@@ -112,6 +136,8 @@ class DepthAnythingV2Estimator:
         logger.info(f"Loading Depth Anything V2 ({self.model_size}) via Transformers...")
         logger.info(f"Model: {model_name}")
         logger.info(f"Device: {self.device}")
+        if transformers_version:
+            logger.info(f"Transformers version: {transformers_version}")
         
         try:
             # Try pipeline first (simpler API)
